@@ -458,9 +458,10 @@ export class AmbientEngine {
 
     try {
       this.sonic = new SuperSonic({
-        baseURL: 'https://unpkg.com/supersonic-scsynth@latest/dist/',
-        sampleBaseURL: 'https://unpkg.com/supersonic-scsynth-samples@latest/samples/',
-        synthdefBaseURL: 'https://unpkg.com/supersonic-scsynth-synthdefs@latest/synthdefs/',
+        wasmBaseURL: '/supersonic/wasm/',
+        workerBaseURL: '/supersonic/workers/',
+        sampleBaseURL: '/supersonic/samples/',
+        synthdefBaseURL: '/supersonic/synthdefs/',
       });
       await this.sonic.init();
 

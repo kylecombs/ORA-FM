@@ -12,7 +12,10 @@
   "dependencies": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "supersonic-scsynth": "^0.50.0"
+    "supersonic-scsynth": "^0.50.0",
+    "supersonic-scsynth-core": "^0.50.0",
+    "supersonic-scsynth-samples": "^0.50.0",
+    "supersonic-scsynth-synthdefs": "^0.50.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
