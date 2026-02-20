@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ambient — SuperSonic</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400&display=swap');
+
+/* ── Root ────────────────────────────────── */
+:root {
+  --ink:     #d4cfc8;
+  --dim:     #7a7570;
+  --deep:    #0c0b0a;
+  --surface: #111010;
+  --lift:    #1a1917;
+  --border:  #252320;
+  --gold:    #b89a6a;
+  --mist:    #8ab0c8;
+  --rose:    #c08880;
+  --sage:    #7aab88;
+  --glow:    rgba(184, 154, 106, 0.12);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--deep);
+  color: var(--ink);
+  font-family: 'DM Mono', monospace;
+  min-height: 100vh;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
+
+/* ── Grain overlay ────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+/* ── Layout ───────────────────────────────── */
+main {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem 3rem;
+  gap: 2.5rem;
+  min-height: 100vh;
+}
+
+/* ── Masthead ─────────────────────────────── */
+.masthead {
+  text-align: center;
+}
+
+.masthead h1 {
+  font-family: 'DM Serif Display', serif;
+  font-style: italic;
+  font-size: clamp(2rem, 6vw, 3.5rem);
+  color: var(--gold);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  margin-bottom: 0.4rem;
+}
+
+.masthead p {
+  font-size: 0.65rem;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* ── Orb ──────────────────────────────────── */
+.orb-ring {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.orb-outer {
+  width: 160px; height: 160px;
+  border-radius: 50%;
+  border: 1px solid rgba(184, 154, 106, 0.2);
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.orb-outer::before {
+  content: '';
+  position: absolute; inset: -12px;
+  border-radius: 50%;
+  border: 1px solid rgba(184, 154, 106, 0.08);
+}
+
+.orb-outer::after {
+  content: '';
+  position: absolute; inset: -24px;
+  border-radius: 50%;
+  border: 1px solid rgba(184, 154, 106, 0.04);
+}
+
+.orb-inner {
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 38% 30%,
+    rgba(184,154,106,0.18) 0%,
+    rgba(184,154,106,0.06) 45%,
+    transparent 70%),
+    radial-gradient(ellipse at 60% 70%,
+    rgba(138,176,200,0.10) 0%,
+    transparent 60%),
+    var(--surface);
+  border: 1px solid rgba(184, 154, 106, 0.25);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px;
+  transition: all 0.4s ease;
+}
+
+.orb-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--gold);
+  text-transform: uppercase;
+}
+
+.orb-sub {
+  font-size: 0.55rem;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+
+/* Playing state */
+.orb-ring.playing .orb-outer { animation: orb-breathe 5s ease-in-out infinite; }
+.orb-ring.playing .orb-inner {
+  border-color: rgba(122, 171, 136, 0.4);
+  background: radial-gradient(ellipse at 38% 30%,
+    rgba(122,171,136,0.18) 0%,
+    rgba(122,171,136,0.06) 45%,
+    transparent 70%),
+    var(--surface);
+}
+.orb-ring.playing .orb-label { color: var(--sage); }
+
+.orb-ring.loading { cursor: wait; opacity: 0.6; }
+
+@keyframes orb-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 50px 4px rgba(122,171,136,0.12); }
+}
+
+/* ── Waveform display ─────────────────────── */
+.wave-display {
+  width: 100%;
+  max-width: 480px;
+  height: 52px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 2px;
+  opacity: 0.5;
+  transition: opacity 0.8s;
+}
+
+.wave-display.active { opacity: 1; }
+
+.wave-bar {
+  flex: 1;
+  background: linear-gradient(to top, var(--gold), rgba(184,154,106,0.2));
+  border-radius: 1px 1px 0 0;
+  min-height: 2px;
+  transition: height 0.25s ease;
+  will-change: height;
+}
+
+/* ── Panel ────────────────────────────────── */
+.panel {
+  width: 100%;
+  max-width: 480px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.panel-section {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-section:last-child { border-bottom: none; }
+
+.section-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 0.85rem;
+}
+
+/* ── Layer grid ───────────────────────────── */
+.layers {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.layer {
+  background: var(--lift);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.65rem 0.6rem;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--dim);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-align: left;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.4;
+  position: relative;
+  overflow: hidden;
+}
+
+.layer::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: var(--gold);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.layer.on {
+  border-color: rgba(184,154,106,0.3);
+  color: var(--ink);
+}
+
+.layer.on::before { opacity: 1; }
+
+.layer:disabled { opacity: 0.25; cursor: not-allowed; }
+
+.layer-name {
+  color: var(--gold);
+  opacity: 0;
+  font-size: 0.55rem;
+  letter-spacing: 0.05em;
+  transition: opacity 0.3s;
+}
+
+.layer.on .layer-name { opacity: 0.7; }
+
+/* ── Selectors row ────────────────────────── */
+.selectors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.selector-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.selector-group label {
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+select {
+  background: var(--lift);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+  width: 100%;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237a7570' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+}
+
+select:focus { outline: none; border-color: rgba(184,154,106,0.4); }
+
+/* ── Arc progress ─────────────────────────── */
+.arc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.arc-time {
+  font-size: 0.65rem;
+  color: var(--dim);
+  white-space: nowrap;
+  min-width: 36px;
+}
+
+.arc-track {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+  overflow: visible;
+  position: relative;
+}
+
+.arc-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold) 0%, var(--mist) 100%);
+  border-radius: 1px;
+  width: 0%;
+  transition: width 5s linear;
+  position: relative;
+}
+
+.arc-fill::after {
+  content: '';
+  position: absolute;
+  right: -3px; top: -2px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--mist);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.arc-fill.active::after { opacity: 1; }
+
+/* ── Status ───────────────────────────────── */
+.status-bar {
+  padding: 0.85rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.status-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex-shrink: 0;
+  transition: background 0.5s;
+}
+
+.status-dot.on { background: var(--sage); animation: pulse-dot 2s ease-in-out infinite; }
+.status-dot.err { background: var(--rose); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.status-text {
+  font-size: 0.65rem;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+
+/* ── Footer ───────────────────────────────── */
+footer {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 0 1.5rem 1.5rem;
+  font-size: 0.6rem;
+  color: var(--dim);
+  opacity: 0.5;
+  line-height: 1.8;
+}
+
+footer a { color: var(--dim); text-decoration: underline; text-underline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<main>
+  <!-- Masthead -->
+  <div class="masthead">
+    <h1>Ambient</h1>
+    <p>SuperSonic · psychoacoustic design · v2</p>
+  </div>
+
+  <!-- Orb (main start/stop control) -->
+  <div class="orb-ring" id="orb" title="Click to start / stop">
+    <div class="orb-outer">
+      <div class="orb-inner">
+        <span class="orb-label" id="orbLabel">Begin</span>
+        <span class="orb-sub" id="orbSub">tap to start</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1/f Waveform visualizer -->
+  <div class="wave-display" id="waveDisplay" aria-hidden="true"></div>
+
+  <!-- Main panel -->
+  <div class="panel">
+
+    <!-- Layers -->
+    <div class="panel-section">
+      <div class="section-label">Layers</div>
+      <div class="layers">
+        <button class="layer" id="btnPad" disabled>
+          <span>Pad</span>
+          <span class="layer-name">dark ambience</span>
+        </button>
+        <button class="layer" id="btnTexture" disabled>
+          <span>Texture</span>
+          <span class="layer-name">hollow</span>
+        </button>
+        <button class="layer" id="btnMelody" disabled>
+          <span>Melody</span>
+          <span class="layer-name">blade · browian</span>
+        </button>
+        <button class="layer" id="btnBinaural" disabled>
+          <span>Binaural</span>
+          <span class="layer-name">6 Hz theta</span>
+        </button>
+        <button class="layer" id="btnNoise" disabled>
+          <span>Noise</span>
+          <span class="layer-name">brown · 1/f²</span>
+        </button>
+        <button class="layer" id="btnSilence" disabled style="cursor:default">
+          <span>Silence</span>
+          <span class="layer-name">rebound pause</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="panel-section">
+      <div class="section-label">Parameters</div>
+      <div class="selectors">
+        <div class="selector-group">
+          <label>Root</label>
+          <select id="rootSelect">
+            <option value="57">A3 · 220 Hz</option>
+            <option value="48">C3 · 131 Hz</option>
+            <option value="53">F3 · 175 Hz</option>
+            <option value="62">D4 · 294 Hz</option>
+          </select>
+        </div>
+        <div class="selector-group">
+          <label>Beat · Hz</label>
+          <select id="beatSelect">
+            <option value="6">6 Hz · deep θ</option>
+            <option value="10">10 Hz · α calm</option>
+            <option value="4">4 Hz · δ sleep</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session arc -->
+    <div class="panel-section">
+      <div class="section-label">Session Arc · 25 min</div>
+      <div class="arc-row">
+        <span class="arc-time" id="arcElapsed">0:00</span>
+        <div class="arc-track">
+          <div class="arc-fill" id="arcFill"></div>
+        </div>
+        <span class="arc-time" style="text-align:right">25:00</span>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-bar">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-text" id="statusText">
+        Use headphones for binaural effect · tap orb to begin
+      </span>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  Powered by <a href="https://sonic-pi.net/supersonic/demo.html" target="_blank">SuperSonic</a>
+  — scsynth WebAssembly by Sam Aaron<br>
+  1/f noise control · pentatonic minor · Bernardi silence rebound · 0.1 Hz phrase cycle
+</footer>
+
+<script type="module">
+// ════════════════════════════════════════════════════════════
+//  AMBIENT MEDITATION — SuperSonic WebAssembly Edition
+//
+//  Architecture: scsynth runs in the browser via WebAssembly.
+//  JavaScript acts as the "language layer" — computing all 1/f
+//  control values, Brownian pitch walks, and scheduling logic,
+//  then driving scsynth via OSC messages.
+//
+//  Layers:
+//    · Pad      — sonic-pi-dark_ambience, 3-voice JI chord
+//    · Texture  — sonic-pi-hollow, 1/f amp + pan drift
+//    · Melody   — sonic-pi-blade, Brownian pentatonic walk
+//    · Binaural — sonic-pi-beep, 6 Hz theta on 250 Hz carrier
+//    · Noise    — sonic-pi-bnoise, pink-noise floor
+//    · Silence  — Bernardi parasympathetic rebound pauses
+//
+//  Science applied:
+//    · 1/f control signal (Voss & Clarke 1978)
+//    · ~10 s inter-onset times (Bernardi 2009)
+//    · Brownian pitch walk (short-range 1/f correlation)
+//    · Strategic silences every 30–90 s (Bernardi 2006)
+//    · 25-min session arc: tempo/timbre/density deceleration
+//    · Just-intonation voicing (root + P5 + octave)
+//    · Minor pentatonic — no semitone tension (Costa 2024)
+// ════════════════════════════════════════════════════════════
+
+import { SuperSonic } from 'https://unpkg.com/supersonic-scsynth@latest';
+
+// ── Constants ──────────────────────────────────────────────
+const SESSION_MS  = 25 * 60 * 1000; // 25 minutes
+const PENTA       = [0, 3, 5, 7, 10]; // minor pentatonic semitone offsets
+
+// ── State ──────────────────────────────────────────────────
+let sonic       = null;
+let nodeId      = 1000;           // scsynth node ID counter
+let running     = false;
+let sessionStart = null;
+const nodes     = new Map();      // label → scsynth nodeId
+const timers    = new Set();      // all active timer IDs
+
+// ── OSC shorthand ──────────────────────────────────────────
+const osc = (...args) => { if (sonic && running) sonic.send(...args); };
+
+// Create a synth node; returns the assigned nodeId
+function sNew(synthName, label, ...params) {
+  const id = nodeId++;
+  if (label) nodes.set(label, id);
+  sonic.send('/s_new', synthName, id, 0, 1, ...params);
+  return id;
+}
+
+// Update running node parameters
+function nSet(label, ...params) {
+  const id = nodes.get(label);
+  if (id != null) sonic.send('/n_set', id, ...params);
+}
+
+// Free a node (triggers release envelope then auto-frees)
+function nFree(label) {
+  const id = nodes.get(label);
+  if (id != null) {
+    try { sonic.send('/n_set', id, 'amp', 0.001); } catch {}
+    setTimeout(() => {
+      try { sonic.send('/n_free', id); } catch {}
+    }, 500);
+    nodes.delete(label);
+  }
+}
+
+// ── Timer helpers ──────────────────────────────────────────
+function after(ms, fn) {
+  const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
+  timers.add(id);
+  return id;
+}
+
+function every(ms, fn) {
+  const id = setInterval(fn, ms);
+  timers.add(id);
+  return id;
+}
+
+// ── Utility ────────────────────────────────────────────────
+const clamp    = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const rrand    = (lo, hi)    => lo + Math.random() * (hi - lo);
+const hzToMidi = hz          => 69 + 12 * Math.log2(hz / 440);
+
+// Box-Muller Gaussian random
+function gaussRand(mean, std) {
+  const u = Math.max(1e-10, Math.random());
+  const v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+const getRoot = () => parseInt(document.getElementById('rootSelect').value);
+const getBeat = () => parseFloat(document.getElementById('beatSelect').value);
+
+// ══════════════════════════════════════════════════════════
+//  1/f NOISE ENGINE
+//  Sums N noise sources at geometrically spaced update rates.
+//  Rate doubling at each octave → power spectrum ∝ 1/f (β≈1).
+//  This is Voss & Clarke's dice algorithm, implemented in JS.
+// ══════════════════════════════════════════════════════════
+class OneFNoise {
+  constructor(rates = [0.01, 0.02, 0.04, 0.08, 0.16]) {
+    this.sources = rates.map(rate => ({
+      rate,
+      cur:     rrand(-1, 1),
+      target:  rrand(-1, 1),
+      lastMs:  performance.now(),
+    }));
+  }
+
+  // Advance internal state; returns raw sum in ~(-N/2 … N/2)
+  _advance() {
+    const now = performance.now();
+    this.sources.forEach(s => {
+      const period = 1000 / s.rate;
+      if (now - s.lastMs >= period) {
+        s.cur    = s.target;
+        s.target = rrand(-1, 1);
+        s.lastMs = now;
+      } else {
+        // Smooth interpolation — avoids stepped modulation
+        const t = (now - s.lastMs) / period;
+        s.cur += (s.target - s.cur) * Math.min(t * 0.08, 0.08);
+      }
+    });
+    return this.sources.reduce((acc, s) => acc + s.cur, 0);
+  }
+
+  // Scaled output in [lo, hi]
+  get(lo, hi) {
+    const raw = this._advance();           // roughly (-N/2)…(N/2)
+    const norm = raw / this.sources.length; // normalise → (-0.5)…(0.5)
+    return lo + (norm + 0.5) * (hi - lo);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  BROWNIAN PITCH WALK
+//  Short-range 1/f correlation: each step limited to ±maxStep.
+//  Produces naturally "wandering" melodic contours.
+// ══════════════════════════════════════════════════════════
+class BrownWalk {
+  constructor(min, max, maxStep) {
+    this.val     = Math.floor((min + max) / 2);
+    this.min     = min;
+    this.max     = max;
+    this.maxStep = maxStep;
+  }
+  next() {
+    this.val += Math.round(rrand(-this.maxStep, this.maxStep));
+    this.val  = clamp(this.val, this.min, this.max);
+    return this.val;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  LAYER: PAD
+//  Three-voice chord in just-intonation ratios: 1, 3/2, 2
+//  (root, perfect fifth +7 semitones, octave +12 semitones).
+//  Consonant partials align cleanly — no beating between voices.
+//  synth: sonic-pi-dark_ambience (has built-in reverb room/damp)
+// ══════════════════════════════════════════════════════════
+function startPad() {
+  const root = getRoot();
+  [
+    { semis: 0,  amp: 0.30, pan: -0.15, cut: 72, atk: 5 },
+    { semis: 7,  amp: 0.22, pan:  0.15, cut: 68, atk: 7 },
+    { semis: 12, amp: 0.15, pan:  0.00, cut: 64, atk: 9 },
+  ].forEach((v, i) => {
+    sNew('sonic-pi-dark_ambience', `pad${i}`,
+      'note',        root + v.semis,
+      'amp',         v.amp,
+      'pan',         v.pan,
+      'attack',      v.atk,
+      'sustain',     9999,
+      'release',     10,
+      'cutoff',      v.cut,
+      'room',        0.9,
+      'reverb_damp', 0.5,
+      'res',         0.05
+    );
+  });
+  layerOn('btnPad');
+}
+
+// ══════════════════════════════════════════════════════════
+//  LAYER: TEXTURE
+//  Hollow synth: sustained upper-register shimmer.
+//  1/f-modulated amp and pan (via the modulation loop below).
+// ══════════════════════════════════════════════════════════
+function startTexture() {
+  sNew('sonic-pi-hollow', 'texture',
+    'note',    getRoot() + 12,
+    'amp',     0.12,
+    'pan',     0,
+    'attack',  5,
+    'sustain', 9999,
+    'release', 8,
+    'cutoff',  80,
+    'res',     0.1
+  );
+  layerOn('btnTexture');
+}
+
+// ══════════════════════════════════════════════════════════
+//  LAYER: BINAURAL BEATS
+//  Left ear: 250 Hz (MIDI ≈ 59.23)
+//  Right ear: 250 + beatFreq Hz
+//  The brain perceives the difference as a phantom oscillation.
+//  Embedded at −18 dB equivalent (amp ≈ 0.04).
+//  *** Headphones required for the binaural effect. ***
+//  Without headphones, you still hear two soft tones.
+// ══════════════════════════════════════════════════════════
+function startBinaural() {
+  const beat  = getBeat();
+  const leftN  = hzToMidi(250);
+  const rightN = hzToMidi(250 + beat);
+
+  sNew('sonic-pi-beep', 'binL',
+    'note', leftN, 'amp', 0.04, 'pan', -1.0,
+    'attack', 3, 'sustain', 9999, 'release', 5
+  );
+  sNew('sonic-pi-beep', 'binR',
+    'note', rightN, 'amp', 0.04, 'pan',  1.0,
+    'attack', 3, 'sustain', 9999, 'release', 5
+  );
+  layerOn('btnBinaural');
+}
+
+// Recalculate binaural frequencies when beat selector changes
+function updateBinaural() {
+  const rightN = hzToMidi(250 + getBeat());
+  nSet('binR', 'note', rightN);
+  const label = document.getElementById('btnBinaural').querySelector('.layer-name');
+  if (label) label.textContent = `${getBeat()} Hz theta`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  LAYER: PINK NOISE FLOOR
+//  bnoise (Brown noise ≈ 1/f²) provides a warm, low noise bed.
+//  Filtered to taste with cutoff/res parameters.
+// ══════════════════════════════════════════════════════════
+function startNoise() {
+  sNew('sonic-pi-bnoise', 'noise',
+    'amp',     0.04,
+    'pan',     0,
+    'attack',  4,
+    'sustain', 9999,
+    'release', 6,
+    'cutoff',  95,
+    'res',     0.05
+  );
+  layerOn('btnNoise');
+}
+
+// ══════════════════════════════════════════════════════════
+//  LAYER: SPARSE MELODY
+//  Pitch: Brownian walk over minor pentatonic degrees.
+//  Timing: inter-onset centred on ~10 s (Gaussian, σ=3 s).
+//    → 0.1 Hz phrase cycle = Mayer wave alignment (Bernardi 2009)
+//  Attack: 1.5 s — no transient, onset dissolves into the mix.
+//  Synth: blade (smooth, with optional vibrato).
+// ══════════════════════════════════════════════════════════
+function scheduleMelody() {
+  const walk = new BrownWalk(0, 4, 2); // walk over 5 pentatonic steps
+
+  function fireNote() {
+    if (!running) return;
+
+    const degree   = walk.next();
+    const semitone = PENTA[degree];
+    // Octave selection: mostly mid-register, occasionally high
+    const octave   = Math.random() < 0.65 ? 0 : Math.random() < 0.8 ? 12 : 24;
+    const note     = getRoot() + semitone + octave;
+    const sustain  = rrand(4, 9);
+    const amp      = rrand(0.07, 0.15);
+    const pan      = clamp(gaussRand(0, 0.3), -0.8, 0.8);
+
+    // One-shot note: auto-frees after attack+sustain+release
+    sonic.send('/s_new', 'sonic-pi-blade', nodeId++, 0, 1,
+      'note',          note,
+      'amp',           amp,
+      'pan',           pan,
+      'attack',        1.5,
+      'sustain',       sustain,
+      'release',       sustain * 0.9,
+      'cutoff',        clamp(65 + Math.random() * 20, 50, 90),
+      'res',           0.08,
+      'vibrato_rate',  2 + Math.random() * 4,
+      'vibrato_depth', 0.04 + Math.random() * 0.08
+    );
+
+    // Next inter-onset: Gaussian centred on 10 s, clipped 6–20 s
+    // This 0.1 Hz phrase cadence aligns with Mayer wave frequency
+    const nextMs = clamp(gaussRand(10, 3), 6, 20) * 1000;
+    after(nextMs, fireNote);
+  }
+
+  after(3000, fireNote); // first note after 3 s
+  layerOn('btnMelody');
+}
+
+// ══════════════════════════════════════════════════════════
+//  1/f MODULATION LOOP
+//  Updates all sustained synth parameters every 200 ms using
+//  1/f noise generators. This is the JavaScript equivalent of
+//  the SuperCollider LFNoise1.kr UGens in the .scd version.
+//
+//  Parameters modulated:
+//    · Pad filter cutoff sweep (slow, 0.02–0.16 Hz range)
+//    · Texture amp + pan drift (slower, 0.01–0.12 Hz)
+//    · Visualizer bars (16 independent 1/f bars)
+// ══════════════════════════════════════════════════════════
+function start1fModulation() {
+  // Separate 1/f generators for each parameter dimension
+  const filtNoise = new OneFNoise([0.02, 0.04, 0.08, 0.16, 0.32]);
+  const ampNoise  = new OneFNoise([0.01, 0.03, 0.06, 0.12]);
+  const panNoise  = new OneFNoise([0.05, 0.10, 0.20]);
+
+  // One 1/f generator per visualiser bar
+  const vizNoises = Array.from({ length: 16 }, (_, i) =>
+    new OneFNoise([0.04 + i*0.02, 0.08 + i*0.03, 0.18 + i*0.04])
+  );
+  const bars = document.querySelectorAll('.wave-bar');
+
+  every(200, () => {
+    if (!running) return;
+
+    // ── Pad filter: 1/f sweep over all three voices
+    const baseCut = filtNoise.get(50, 85);
+    [0, 1, 2].forEach(i => {
+      const id = nodes.get(`pad${i}`);
+      if (id) sonic.send('/n_set', id, 'cutoff', baseCut - i * 4);
+    });
+
+    // ── Texture: 1/f amp swell + stereo pan drift
+    const texAmp = ampNoise.get(0.06, 0.18);
+    const texPan = panNoise.get(-0.55, 0.55);
+    const texId  = nodes.get('texture');
+    if (texId) sonic.send('/n_set', texId, 'amp', texAmp, 'pan', texPan);
+
+    // ── Visualiser bars
+    bars.forEach((bar, i) => {
+      const h = vizNoises[i].get(4, 88);
+      bar.style.height = `${h}%`;
+    });
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  STRATEGIC SILENCE ROUTINE (Bernardi 2006)
+//  Research finding: 2-min silences produce *deeper*
+//  parasympathetic relaxation than continuous music.
+//  Even brief 2–5 s pauses trigger measurable rebound.
+//  Implementation: fade pad + texture to near-zero, wait, restore.
+// ══════════════════════════════════════════════════════════
+function startSilenceRoutine() {
+  const BASE_AMPS = [0.30, 0.22, 0.15]; // pad voice amplitudes
+
+  function doSilence() {
+    if (!running) return;
+    layerOn('btnSilence');
+
+    // Fade to near-silence
+    [0,1,2].forEach(i => {
+      const id = nodes.get(`pad${i}`);
+      if (id) sonic.send('/n_set', id, 'amp', 0.003);
+    });
+    const texId = nodes.get('texture');
+    if (texId) sonic.send('/n_set', texId, 'amp', 0.003);
+
+    // Hold silence for 2–5 s
+    after(rrand(2000, 5000), () => {
+      if (!running) return;
+      layerOff('btnSilence');
+      // Restore
+      BASE_AMPS.forEach((a, i) => {
+        const id = nodes.get(`pad${i}`);
+        if (id) sonic.send('/n_set', id, 'amp', a);
+      });
+      if (texId) sonic.send('/n_set', texId, 'amp', 0.12);
+
+      // Next silence: 30–90 s later
+      after(rrand(30000, 90000), doSilence);
+    });
+  }
+
+  after(45000, doSilence); // first pause after 45 s
+}
+
+// ══════════════════════════════════════════════════════════
+//  SESSION ARC (25-minute gradual evolution)
+//  Based on Weightless (Marconi Union) design and Bernardi findings:
+//    · Pad filter cutoff darkens from 72→47 over the session
+//    · Texture amp declines 40% (less activity as depth increases)
+//    · Progress bar + elapsed time display updated every 5 s
+// ══════════════════════════════════════════════════════════
+function startSessionArc() {
+  const fill    = document.getElementById('arcFill');
+  const elapsed = document.getElementById('arcElapsed');
+  sessionStart  = Date.now();
+
+  fill.classList.add('active');
+
+  every(5000, () => {
+    if (!running) return;
+
+    const ms = Date.now() - sessionStart;
+    const t  = Math.min(ms / SESSION_MS, 1.0);
+
+    // Progress display
+    fill.style.width = `${t * 100}%`;
+    const sec = Math.floor(ms / 1000);
+    elapsed.textContent = `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`;
+
+    // Filter darkening: centre of 1/f sweep shifts down as t→1
+    const arcOffset = t * -25; // −25 MIDI cutoff units over 25 min
+    const baseCuts  = [72, 68, 64];
+    baseCuts.forEach((base, i) => {
+      const id = nodes.get(`pad${i}`);
+      if (id) sonic.send('/n_set', id, 'cutoff', clamp(base + arcOffset, 38, 90));
+    });
+
+    // Texture amp reduction
+    const texId = nodes.get('texture');
+    if (texId) sonic.send('/n_set', texId, 'amp', 0.12 * (1 - t * 0.45));
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  STOP ALL
+// ══════════════════════════════════════════════════════════
+function stopAll() {
+  running = false;
+
+  // Cancel all timers
+  timers.forEach(id => { clearTimeout(id); clearInterval(id); });
+  timers.clear();
+
+  // Fade out each node's amp to 0, then free it
+  nodes.forEach((id, label) => {
+    try { sonic.send('/n_set', id, 'amp', 0.001); } catch {}
+    after(800, () => {
+      try { sonic.send('/n_free', id); } catch {}
+    });
+  });
+  nodes.clear();
+
+  // UI reset
+  ['btnPad','btnTexture','btnMelody','btnBinaural','btnNoise','btnSilence']
+    .forEach(layerOff);
+  document.getElementById('arcFill').classList.remove('active');
+}
+
+// ══════════════════════════════════════════════════════════
+//  BOOT SEQUENCE
+// ══════════════════════════════════════════════════════════
+async function bootAndStart() {
+  setStatus('Booting SuperSonic WebAssembly…', false);
+  setOrbState('loading');
+
+  try {
+    sonic = new SuperSonic({
+      baseURL:        'https://unpkg.com/supersonic-scsynth@latest/dist/',
+      sampleBaseURL:  'https://unpkg.com/supersonic-scsynth-samples@latest/samples/',
+      synthdefBaseURL:'https://unpkg.com/supersonic-scsynth-synthdefs@latest/synthdefs/',
+    });
+    await sonic.init();
+
+    const defs = [
+      'sonic-pi-dark_ambience',
+      'sonic-pi-hollow',
+      'sonic-pi-blade',
+      'sonic-pi-beep',
+      'sonic-pi-bnoise',
+    ];
+    for (const def of defs) {
+      setStatus(`Loading · ${def.replace('sonic-pi-','')}…`, false);
+      await sonic.loadSynthDef(def);
+    }
+
+    // ── All ready — begin playback ──────────────────────
+    running = true;
+    setStatus('Playing · 25 min arc · use headphones for binaural', true);
+    setOrbState('playing');
+
+    // Unlock all layer buttons
+    ['btnPad','btnTexture','btnMelody','btnBinaural','btnNoise']
+      .forEach(id => { document.getElementById(id).disabled = false; });
+
+    // Staggered layer entry — prevents percussive mass onset
+    startPad();
+    start1fModulation();
+    document.getElementById('waveDisplay').classList.add('active');
+    after(5000,  startNoise);
+    after(8000,  startTexture);
+    after(12000, scheduleMelody);
+    after(15000, startBinaural);
+    after(40000, startSilenceRoutine);
+    startSessionArc();
+
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, false, true);
+    setOrbState('idle');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════════════════
+function setStatus(msg, active = false, error = false) {
+  document.getElementById('statusText').textContent = msg;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot' + (active ? ' on' : error ? ' err' : '');
+}
+
+function setOrbState(state) {
+  const orb   = document.getElementById('orb');
+  const label = document.getElementById('orbLabel');
+  const sub   = document.getElementById('orbSub');
+
+  orb.classList.remove('playing', 'loading');
+
+  switch(state) {
+    case 'playing':
+      orb.classList.add('playing');
+      label.textContent = 'Pause';
+      sub.textContent   = 'tap to stop';
+      break;
+    case 'loading':
+      orb.classList.add('loading');
+      label.textContent = '···';
+      sub.textContent   = 'loading';
+      break;
+    default:
+      label.textContent = 'Begin';
+      sub.textContent   = 'tap to start';
+  }
+}
+
+function layerOn(id)  {
+  const el = document.getElementById(id);
+  if (el) el.classList.add('on');
+}
+
+function layerOff(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('on');
+}
+
+// ══════════════════════════════════════════════════════════
+//  WIRE VISUALISER BARS
+// ══════════════════════════════════════════════════════════
+const waveDisplay = document.getElementById('waveDisplay');
+for (let i = 0; i < 16; i++) {
+  const bar = document.createElement('div');
+  bar.className = 'wave-bar';
+  bar.style.height = `${10 + Math.random() * 30}%`;
+  waveDisplay.appendChild(bar);
+}
+
+// ══════════════════════════════════════════════════════════
+//  EVENT LISTENERS
+// ══════════════════════════════════════════════════════════
+
+// Orb: start / stop
+document.getElementById('orb').addEventListener('click', () => {
+  if (document.getElementById('orb').classList.contains('loading')) return;
+
+  if (running) {
+    stopAll();
+    setOrbState('idle');
+    setStatus('Fading out…');
+    document.getElementById('waveDisplay').classList.remove('active');
+    document.getElementById('arcFill').style.width = '0%';
+    document.getElementById('arcElapsed').textContent = '0:00';
+    ['btnPad','btnTexture','btnMelody','btnBinaural','btnNoise']
+      .forEach(id => { document.getElementById(id).disabled = true; });
+    after(1500, () => setStatus('Use headphones for binaural effect · tap orb to begin'));
+  } else {
+    bootAndStart();
+  }
+});
+
+// Layer toggle buttons
+function toggleLayer(label, startFn, stopLabels) {
+  const btn = document.getElementById(label);
+  if (!btn || !running) return;
+  if (btn.classList.contains('on')) {
+    (stopLabels || [label.replace('btn','').toLowerCase()])
+      .forEach(l => nFree(l));
+    layerOff(label);
+  } else {
+    startFn();
+  }
+}
+
+document.getElementById('btnPad').addEventListener('click', () =>
+  toggleLayer('btnPad', startPad, ['pad0','pad1','pad2']));
+
+document.getElementById('btnTexture').addEventListener('click', () =>
+  toggleLayer('btnTexture', startTexture, ['texture']));
+
+document.getElementById('btnMelody').addEventListener('click', () => {
+  const btn = document.getElementById('btnMelody');
+  if (!running) return;
+  // Melody uses one-shot notes; just toggle the scheduling state
+  if (btn.classList.contains('on')) { layerOff('btnMelody'); }
+  else { scheduleMelody(); }
+});
+
+document.getElementById('btnBinaural').addEventListener('click', () =>
+  toggleLayer('btnBinaural', startBinaural, ['binL','binR']));
+
+document.getElementById('btnNoise').addEventListener('click', () =>
+  toggleLayer('btnNoise', startNoise, ['noise']));
+
+// Live parameter updates
+document.getElementById('beatSelect').addEventListener('change', updateBinaural);
+
+document.getElementById('rootSelect').addEventListener('change', () => {
+  if (!running) return;
+  // Restart pad and texture with new root (free old nodes first)
+  ['pad0','pad1','pad2'].forEach(l => nFree(l));
+  nFree('texture');
+  after(600, () => { startPad(); after(2000, startTexture); });
+});
+
+</script>
+</body>
+</html>
