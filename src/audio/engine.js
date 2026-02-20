@@ -464,6 +464,7 @@ export class AmbientEngine {
         synthdefBaseURL: '/supersonic/synthdefs/',
       });
       await this.sonic.init();
+      await this.sonic.resume();
 
       const defs = [
         'sonic-pi-dark_ambience',
