@@ -103,6 +103,11 @@ export default function TestPage() {
       const resumed = await sonic.resume();
       addLog(`resume() returned ${resumed}. AudioContext state: ${sonic.audioContext?.state}`);
 
+      // Create default group 1 — scsynth doesn't create it automatically
+      // All /s_new calls target group 1 (the 4th arg), so it must exist
+      sonic.send('/g_new', 1, 0, 0);
+      addLog('Created Group 1');
+
       // Load synthdefs
       for (const def of SYNTH_DEFS) {
         addLog(`Loading ${def}...`);
