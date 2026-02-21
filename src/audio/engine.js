@@ -476,6 +476,10 @@ export class AmbientEngine {
       await this.sonic.init();
       await this.sonic.resume();
 
+      // Create the default group (Group 1) that all synth nodes will target
+      // SuperSonic/scsynth doesn't create this automatically like desktop SC
+      this.sonic.send('/g_new', 1, 0, 0); // group 1, add to head of root (0)
+
       this.onDebugUpdate?.(this.getDiagnostics());
 
       const defs = [
