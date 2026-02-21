@@ -584,24 +584,6 @@ export default function GridView() {
           )}
         </div>
 
-        {/* Port row */}
-        <div className="node-port-row">
-          {schema.inputs.length > 0 && (
-            <span className="port-side left">
-              {schema.inputs.map((name) => (
-                <span key={name} className="port-name">{name}</span>
-              ))}
-            </span>
-          )}
-          {schema.outputs.length > 0 && (
-            <span className="port-side right">
-              {schema.outputs.map((name) => (
-                <span key={name} className="port-name">{name}</span>
-              ))}
-            </span>
-          )}
-        </div>
-
         {/* Parameters */}
         {Object.keys(schema.params).length > 0 && (
           <div className="node-params">
