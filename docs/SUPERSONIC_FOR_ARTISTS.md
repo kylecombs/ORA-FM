@@ -328,6 +328,73 @@ setInterval(() => {
 
 ---
 
+## Recording Your Output
+
+SuperSonic can't write audio files directly, but the browser can capture everything coming out of the audio engine using the standard MediaRecorder API:
+
+```javascript
+// Get the audio output stream from SuperSonic's AudioContext
+const dest = sonic.audioContext.createMediaStreamDestination();
+sonic.audioContext.destination.connect(dest); // or however your output is wired
+
+const recorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
+const chunks = [];
+
+recorder.ondataavailable = (e) => chunks.push(e.data);
+recorder.onstop = () => {
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  const url = URL.createObjectURL(blob);
+  // Create a download link
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'recording.webm';
+  a.click();
+};
+
+recorder.start();
+// ... play your sounds ...
+recorder.stop();  // triggers download
+```
+
+---
+
+## Using MIDI Controllers
+
+SuperSonic doesn't handle MIDI natively, but the browser's Web MIDI API lets you connect hardware controllers and convert MIDI to synth triggers:
+
+```javascript
+// Request MIDI access
+const midi = await navigator.requestMIDIAccess();
+
+// Listen to all MIDI inputs
+for (const input of midi.inputs.values()) {
+  input.onmidimessage = (e) => {
+    const [status, note, velocity] = e.data;
+
+    if (status === 144 && velocity > 0) {
+      // Note On
+      const id = 5000 + note;  // unique node ID per note
+      sonic.send('/s_new', 'sonic-pi-prophet', id, 0, 1,
+        'note', note,
+        'amp', velocity / 127,
+        'attack', 0.01,
+        'sustain', 9999,
+        'release', 0.3);
+    }
+
+    if (status === 128 || (status === 144 && velocity === 0)) {
+      // Note Off
+      const id = 5000 + note;
+      sonic.send('/n_set', id, 'gate', 0);
+    }
+  };
+}
+```
+
+This turns any MIDI keyboard or controller into a trigger source for SuperSonic's synth engine — velocity-sensitive, polyphonic, with any voice you choose.
+
+---
+
 ## What You Can't Do (and Why)
 
 | Limitation | Why | What to do instead |

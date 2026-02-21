@@ -43,9 +43,20 @@ Web Audio API → hardware audio output
 
 ### The scsynth-nrt Adaptation
 
-SuperSonic uses `scsynth-nrt` (the non-realtime renderer) repurposed for real-time use. In native SuperCollider, `scsynth-nrt` processes an entire score to a file. In SuperSonic, it has been modified to process exactly one audio block (128 samples by default) per call from the AudioWorklet's `process()` method. The AudioWorklet calls into the WASM binary at audio rate, feeding it queued OSC messages and pulling back rendered audio samples.
+SuperSonic uses `scsynth-nrt` (the non-realtime renderer) repurposed for real-time use. The key line in `audio_processor.cpp`:
 
-This is not a port of the real-time `scsynth` server because the real-time server's architecture depends on OS threading primitives, network sockets, and dynamic memory allocation — none of which are available inside an AudioWorklet.
+```cpp
+options.mRealTime = false; // NRT mode - externally driven, no audio driver
+```
+
+In native SuperCollider, `scsynth-nrt` processes an entire score to a file offline. In SuperSonic, it has been modified to process exactly one audio block (128 samples by default) per call from the AudioWorklet's `process()` method. The AudioWorklet calls `process_audio(current_time, ...)` into the WASM binary at audio rate, feeding it queued OSC messages and pulling back rendered audio samples.
+
+Why NRT mode instead of the real-time server?
+
+- **No native audio driver**: scsynth cannot open PortAudio/JACK/CoreAudio inside WASM. NRT mode relinquishes control of the audio clock to the external caller (the AudioWorklet).
+- **No `main()` entry point**: WASM modules in AudioWorklets cannot have a `main()`. NRT mode allows initialization via `init_memory(sample_rate)` and frame-by-frame stepping via `process_audio()`.
+- **No thread spawning**: Real-time scsynth spawns its own audio threads. NRT mode avoids this entirely — critical since WASM/AudioWorklet cannot spawn threads.
+- **No dynamic memory in audio path**: Real-time scsynth uses RT-safe allocators. NRT mode allows the WASM heap to be pre-allocated statically.
 
 ---
 
@@ -67,10 +78,29 @@ SuperSonic supports two communication modes:
 **SharedArrayBuffer (SAB) mode**:
 - OSC messages are written into a lock-free ring buffer backed by `SharedArrayBuffer`
 - The AudioWorklet reads from the ring buffer on each `process()` call
+- Lock acquisition uses a two-phase mechanism: a brief CAS (Compare-And-Swap) spin to avoid kernel round-trips in uncontended cases, then `Atomics.wait()` for guaranteed acquisition when contended
+- Main thread restriction: browsers prohibit `Atomics.wait()` on the main thread, so the main thread uses an optimistic single CAS attempt; if it fails, it routes through the prescheduler worker (tracked by `ringBufferDirectWriteFails` metric — not an error)
 - Lower latency, but requires `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers
 - Architecture: Main thread → `IN_BUFFER` (SharedArrayBuffer) → AudioWorklet reads → scsynth WASM processes → replies written to `OUT_BUFFER` → Main thread reads
+- Hybrid deployment is possible: SAB for local core assets, CDN for samples/synthdefs
 
 Both modes preserve OSC message structure. An NTP-based pre-scheduler worker (`osc_out_prescheduler_worker.js`) handles timestamp-based scheduling for sample-accurate timing.
+
+### OSC Message Format in Ring Buffer
+
+Messages are 16-byte aligned with validation headers:
+
+```
+struct alignas(4) Message {
+    uint32_t magic;      // 0xDEADBEEF validation
+    uint32_t length;     // Total message size including header
+    uint32_t sequence;   // Sequence number for ordering
+    uint32_t _padding;   // 16-byte alignment
+    // ... OSC payload follows
+};
+```
+
+The AudioWorklet reads a maximum of 32 OSC messages per audio frame. It validates magic numbers, detects sequence gaps (wraparound-safe), and drops corrupted messages. Padding markers (`0xBADDCAFE`) handle ring buffer wrap-around mid-message.
 
 ### Worker Architecture
 
@@ -103,9 +133,45 @@ The practical impact: CPU-heavy patches that would run fine with supernova's par
 
 ## Memory Model
 
-Native scsynth dynamically allocates memory for SynthDefs, nodes, buffers, and UGen state. SuperSonic pre-allocates a fixed WASM heap at boot. The `getInfo()` method reports `totalMemory` — typically 32–64MB. All server state must fit within this heap.
+Native scsynth dynamically allocates memory for SynthDefs, nodes, buffers, and UGen state. SuperSonic enforces **zero runtime allocation** — no `malloc()` in the audio callback path. The WASM heap is pre-allocated at boot, and `getInfo().totalMemory` reports the total (typically 32–64MB).
 
-If you allocate many large buffers or run hundreds of simultaneous nodes, you can exhaust the heap. There is no dynamic growth; the allocation is fixed at initialization.
+### Shared Memory Layout (from `shared_memory.h`)
+
+| Region | Size | Purpose |
+|--------|------|---------|
+| IN Ring Buffer | 768 KB | JS → scsynth OSC messages (sized for SynthDef blobs) |
+| OUT Ring Buffer | 128 KB | scsynth → JS OSC replies |
+| DEBUG Buffer | 64 KB | Diagnostic messages |
+| Control Region | 48 bytes | Atomic pointers: `in_head`, `in_tail`, `out_head`, `out_tail`, `in_write_lock`, sequence counters, status flags |
+| Metrics Region | 184 bytes | 46 performance counters (4 bytes each) |
+| NTP Start Time | 8 bytes | NTP timestamp when AudioContext booted |
+| Drift Offset | 4 bytes | Clock drift correction (atomic int32, milliseconds) |
+| Node Tree Mirror | ~57 KB | Live synth hierarchy for `getTree()` |
+| Audio Capture | ~375 KB | Test audio capture (48 kHz, stereo, 1 second) |
+
+**Status flags** (bitfield): `STATUS_BUFFER_FULL` (bit 0), `STATUS_OVERRUN` (bit 1), `STATUS_WASM_ERROR` (bit 2), `STATUS_FRAGMENTED_MSG` (bit 3).
+
+### Scheduler Pool
+
+The AudioWorklet-side scheduler uses a fixed pool for sample-accurate bundle dispatch:
+- **512 slots** of **1024 bytes** each (both configurable)
+- Pool-based storage — never reallocated at runtime
+- Index queue stores slot indices, not bundle copies
+- If the pool is full, backpressure keeps messages in the ring buffer until a slot frees
+
+### scsynth Configuration Defaults
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `numBuffers` | 1024 | Audio buffer slots |
+| `maxNodes` | 1024 | Maximum synth/group nodes |
+| `maxGraphDefs` | 1024 | Maximum SynthDef definitions |
+| `numAudioBusChannels` | 128 | Audio bus count |
+| `numOutputBusChannels` | 2 | Output channels |
+| `numControlBusChannels` | 4096 | Control bus count |
+| `realTimeMemorySize` | 8192 | RT memory pool (KB) |
+
+If you exhaust the heap (many large buffers, hundreds of nodes), there is no dynamic growth.
 
 ---
 
@@ -316,19 +382,147 @@ sonic.send('/b_query', 0);
 
 ---
 
+## NTP Time Synchronization
+
+SuperSonic preserves scsynth's NTP-based sample-accurate scheduling. All OSC timestamps use NTP format (seconds since 1900-01-01):
+
+```
+ntpTime = (performance.timeOrigin + performance.now()) / 1000 + NTP_EPOCH_OFFSET
+```
+
+where `NTP_EPOCH_OFFSET = 2208988800`.
+
+**Clock translation** at AudioContext boot:
+
+```
+ntpStartTime = currentNTP - audioContext.currentTime
+currentNTP = audioContextTime + ntpStartTime + driftOffset
+```
+
+**Drift correction**: Hardware crystal clocks diverge at ~100 ppm (~0.1ms/second). Every 1000ms, the main thread compares expected vs actual AudioContext time, computes drift, and broadcasts a correction to the AudioWorklet via SAB or postMessage. The AudioWorklet applies this offset when converting OSC timestamps to sample positions.
+
+**Timetag semantics**: Timetag `0` or `1` = execute immediately. All other values = NTP timestamp for sample-accurate scheduling.
+
+**Pre-scheduler**: The `osc_out_prescheduler_worker.js` parks far-future bundles (>500ms ahead, configurable via `bypassLookaheadMs`) and dispatches them ~500ms before execution time, preventing the AudioWorklet's scheduler pool from filling with distant events.
+
+---
+
+## JavaScript API Reference
+
+### Lifecycle
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `init()` | `Promise<void>` | Initialize engine (must be called from user gesture) |
+| `resume()` | `Promise<boolean>` | Resume AudioContext |
+| `suspend()` | `Promise<void>` | Pause AudioContext |
+| `shutdown()` | `Promise<void>` | Halt engine, preserve listeners, allow reinit |
+| `destroy()` | `Promise<void>` | Permanently destroy instance |
+| `recover()` | `Promise<boolean>` | Smart recovery (tries resume, falls back to reload) |
+| `reload()` | `Promise<boolean>` | Full reload, emits `setup` event |
+| `reset()` | `Promise<void>` | Complete teardown and reinitialize |
+
+### Messaging
+
+| Method | Description |
+|--------|-------------|
+| `send(address, ...args)` | Send OSC message |
+| `sendOSC(oscData, options?)` | Send pre-encoded OSC bytes |
+| `sync(syncId?)` | Wait for server to process all queued commands |
+| `purge()` | Flush pending OSC from both schedulers |
+| `cancelAll()` | Cancel all prescheduler events |
+| `cancelTag(runTag)` | Cancel events by tag |
+| `cancelSession(sessionId)` | Cancel events by session |
+
+### Asset Loading
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `loadSynthDef(source)` | `Promise<{name, size}>` | Load synthdef (name, path, ArrayBuffer, or Blob) |
+| `loadSynthDefs(names)` | `Promise<Record<string, {success, error?}>>` | Load multiple in parallel |
+| `loadSample(bufnum, source, startFrame?, numFrames?)` | `Promise<{bufnum, numFrames, numChannels, sampleRate}>` | Load sample into buffer |
+
+### Monitoring
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `getMetrics()` | `SuperSonicMetrics` | Full metrics (70+ properties) |
+| `getMetricsArray()` | `Uint32Array` | Zero-allocation raw metrics |
+| `getTree()` | `Tree` | Hierarchical node tree |
+| `getInfo()` | `SuperSonicInfo` | Engine config, capabilities, version |
+| `getSnapshot()` | `Snapshot` | Combined metrics + tree |
+
+### Events
+
+| Event | Fires when... |
+|-------|---------------|
+| `setup` | Engine needs initialization (reload, first boot) |
+| `ready` | Engine booted and ready (includes `capabilities`, `bootStats`) |
+| `message` | OSC reply from scsynth (`/n_go`, `/n_end`, `/fail`, `/tr`, etc.) |
+| `error` | Engine or communication error |
+| `loading:start` / `loading:complete` | Asset fetch begins/completes |
+| `audiocontext:statechange` | AudioContext state changed |
+| `audiocontext:suspended` / `audiocontext:resumed` | Suspend/resume lifecycle |
+| `shutdown` / `destroy` | Engine lifecycle events |
+
+### Static Utilities
+
+```javascript
+SuperSonic.osc.encodeMessage(address, args?)   // Encode OSC message
+SuperSonic.osc.encodeBundle(timeTag, packets)  // Encode OSC bundle
+SuperSonic.osc.decode(data)                    // Decode OSC bytes
+SuperSonic.osc.ntpNow()                        // Current NTP time
+SuperSonic.osc.NTP_EPOCH_OFFSET                // 2208988800
+SuperSonic.getMetricsSchema()                   // Schema with byte offsets
+```
+
+---
+
+## SIMD Optimization
+
+The WASM binary uses SIMD instructions when available for audio buffer operations:
+
+```cpp
+#ifdef __wasm_simd128__
+v128_t vec = wasm_v128_load(src + i * 4);
+wasm_v128_store(dst + i * 4, vec);
+#endif
+```
+
+Falls back to `memcpy` when SIMD is not supported. Most modern browsers (Chrome 91+, Firefox 89+, Safari 16.4+) support WASM SIMD.
+
+---
+
+## Licensing
+
+| Package | License |
+|---------|---------|
+| `supersonic-scsynth` (Client API) | MIT |
+| `supersonic-scsynth-core` (WASM engine) | GPL-3.0-or-later |
+| `supersonic-scsynth-synthdefs` (SynthDefs) | MIT |
+| `supersonic-scsynth-samples` (Samples) | CC0 |
+
+The WASM core carries GPL because it derives from SuperCollider's GPL-licensed C++ source. The JavaScript API wrapper is MIT.
+
+---
+
 ## Performance Considerations
 
-1. **Single DSP thread**: All UGen processing happens on one AudioWorklet thread. No supernova-style parallelism. Monitor `process()` duration.
+1. **Single DSP thread**: All UGen processing happens on one AudioWorklet thread. No supernova-style parallelism. Profile with the browser's Performance tab.
 
-2. **Block size**: Default 128 samples. At 44100 Hz, that's ~2.9ms per block. Your entire synth graph must compute within this window.
+2. **Block budget**: Default 128 samples. At 44100 Hz, that's ~2.9ms per block. Your entire synth graph must compute within this window or you get dropouts. The `getMetrics()` method reports `scsynthProcessCount` and `scsynthMessagesDropped` for monitoring.
 
-3. **Memory ceiling**: Fixed WASM heap. Allocating many large buffers or running hundreds of nodes can exhaust memory. Check `getInfo().totalMemory`.
+3. **Message throughput**: Maximum 32 OSC messages processed per audio frame. Bursts beyond this queue in the ring buffer.
 
-4. **Latency**: SAB mode gives lower latency than postMessage mode. For tightest timing, enable SAB with appropriate CORS headers.
+4. **Memory ceiling**: Fixed WASM heap (check `getInfo().totalMemory`). 1024 buffer slots, 1024 max nodes, 1024 max SynthDefs by default — all configurable via `scsynthOptions`.
 
-5. **Sample rate**: Determined by the browser's `AudioContext`, typically 44100 or 48000 Hz. You don't control it — it matches the user's audio hardware.
+5. **Latency**: SAB mode gives lower latency than postMessage mode. For tightest timing, enable SAB with COOP/COEP headers.
 
-6. **No `/b_write`**: You cannot render audio to disk. For offline rendering, consider native scsynth-nrt.
+6. **Sample rate**: Determined by the browser's `AudioContext`, typically 44100 or 48000 Hz. You don't control it — it matches the user's audio hardware. The rate is passed to scsynth via `init_memory(sample_rate)`.
+
+7. **Late bundle detection**: Bundles processed after their scheduled NTP time are logged as "late" and tracked in metrics (capped at 10 seconds to prevent overflow). Rate-limited logging: first occurrence + every 100th.
+
+8. **No `/b_write`**: You cannot render audio to disk. For offline rendering, use native scsynth-nrt.
 
 ---
 
