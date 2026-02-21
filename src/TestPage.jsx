@@ -403,7 +403,7 @@ export default function TestPage() {
       <footer>
         <a href="/">← Ambient</a>
         {' · '}
-        <a href="/sense">Sense Effects</a>
+        <a href="/grid">Grid View</a>
         {' · '}
         Test Lab — isolated synth debugging
       </footer>

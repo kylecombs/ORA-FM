@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { SenseEngine } from './audio/senseEngine';
-import './SenseEffects.css';
+import { GridEngine } from './audio/gridEngine';
+import './GridView.css';
 
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
@@ -196,7 +196,7 @@ function panForPort(portIndex) {
 // ═══════════════════════════════════════════════════════════
 //  MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════
-export default function SenseEffects() {
+export default function GridView() {
   const engineRef = useRef(null);
   const canvasRef = useRef(null);
   const nextId = useRef(1);
@@ -218,7 +218,7 @@ export default function SenseEffects() {
 
   // ── Engine setup ──────────────────────────────────────
   useEffect(() => {
-    engineRef.current = new SenseEngine();
+    engineRef.current = new GridEngine();
     engineRef.current.onStatus = (msg) => setStatus(msg);
     return () => engineRef.current?.stopAll();
   }, []);
@@ -644,8 +644,8 @@ export default function SenseEffects() {
       <main className="sense-main">
         {/* Header */}
         <div className="sense-header">
-          <h1>Sense Effects</h1>
-          <p>modular · supersonic · signal routing</p>
+          <h1>Grid View</h1>
+          <p>synths &amp; effects · modular signal routing</p>
         </div>
 
         {/* Toolbar */}
@@ -712,7 +712,7 @@ export default function SenseEffects() {
           {' · '}
           <a href="/test">Test Lab</a>
           {' · '}
-          Sense Effects — modular signal routing
+          Grid View — modular signal routing
         </div>
       </main>
     </>
