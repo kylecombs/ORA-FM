@@ -295,18 +295,18 @@ export default function GridView() {
   }, []);
 
   // ── Add node ──────────────────────────────────────────
-  const addNode = useCallback(
-    (type) => {
-      const id = nextId.current++;
-      const schema = NODE_SCHEMA[type];
-      const params = {};
-      for (const [k, def] of Object.entries(schema.params)) {
-        params[k] = def.val;
-      }
-      const count = Object.keys(nodes).length;
-      const col = (count - 1) % 3; // -1 because AudioOut is already there
-      const row = Math.floor((count - 1) / 3);
-      setNodes((prev) => ({
+  const addNode = useCallback((type) => {
+    const id = nextId.current++;
+    const schema = NODE_SCHEMA[type];
+    const params = {};
+    for (const [k, def] of Object.entries(schema.params)) {
+      params[k] = def.val;
+    }
+    setNodes((prev) => {
+      const count = Object.keys(prev).length;
+      const col = Math.max(0, count - 1) % 3;
+      const row = Math.floor(Math.max(0, count - 1) / 3);
+      return {
         ...prev,
         [id]: {
           id,
@@ -315,10 +315,9 @@ export default function GridView() {
           y: 40 + row * 220,
           params,
         },
-      }));
-    },
-    [nodes]
-  );
+      };
+    });
+  }, []);
 
   // ── Remove node ───────────────────────────────────────
   const removeNode = useCallback(
