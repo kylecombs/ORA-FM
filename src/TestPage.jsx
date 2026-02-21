@@ -13,14 +13,75 @@ const SYNTH_DEFS = [
   'sonic-pi-bnoise',
 ];
 
+// All playable instrument synthdefs, grouped by category
+const ALL_SYNTHS = {
+  'Tonal': [
+    'sonic-pi-beep', 'sonic-pi-saw', 'sonic-pi-square', 'sonic-pi-tri',
+    'sonic-pi-pulse', 'sonic-pi-subpulse', 'sonic-pi-supersaw',
+    'sonic-pi-dsaw', 'sonic-pi-dpulse', 'sonic-pi-dtri',
+  ],
+  'Modulated': [
+    'sonic-pi-mod_saw', 'sonic-pi-mod_sine', 'sonic-pi-mod_tri',
+    'sonic-pi-mod_pulse', 'sonic-pi-mod_dsaw', 'sonic-pi-mod_fm',
+  ],
+  'Synths': [
+    'sonic-pi-prophet', 'sonic-pi-tb303', 'sonic-pi-tech_saws',
+    'sonic-pi-zawa', 'sonic-pi-hoover', 'sonic-pi-growl',
+    'sonic-pi-rodeo', 'sonic-pi-fm', 'sonic-pi-rhodey',
+  ],
+  'Bells & Keys': [
+    'sonic-pi-pretty_bell', 'sonic-pi-dull_bell', 'sonic-pi-kalimba',
+    'sonic-pi-piano', 'sonic-pi-pluck', 'sonic-pi-organ_tonewheel',
+  ],
+  'Pads & Ambient': [
+    'sonic-pi-dark_ambience', 'sonic-pi-hollow', 'sonic-pi-blade',
+  ],
+  'Bass': [
+    'sonic-pi-bass_foundation', 'sonic-pi-bass_highend',
+    'sonic-pi-chipbass',
+  ],
+  'Chip': [
+    'sonic-pi-chiplead', 'sonic-pi-chipnoise', 'sonic-pi-gabberkick',
+  ],
+  'Noise': [
+    'sonic-pi-noise', 'sonic-pi-bnoise', 'sonic-pi-cnoise',
+    'sonic-pi-gnoise', 'sonic-pi-pnoise',
+  ],
+  '808 Drums': [
+    'sonic-pi-sc808_bassdrum', 'sonic-pi-sc808_snare',
+    'sonic-pi-sc808_clap', 'sonic-pi-sc808_closed_hihat',
+    'sonic-pi-sc808_open_hihat', 'sonic-pi-sc808_cymbal',
+    'sonic-pi-sc808_cowbell', 'sonic-pi-sc808_claves',
+    'sonic-pi-sc808_rimshot', 'sonic-pi-sc808_maracas',
+    'sonic-pi-sc808_tomhi', 'sonic-pi-sc808_tommid',
+    'sonic-pi-sc808_tomlo', 'sonic-pi-sc808_congahi',
+    'sonic-pi-sc808_congamid', 'sonic-pi-sc808_congalo',
+  ],
+};
+
+const MIDI_NOTES = [
+  { label: 'C2', value: 36 }, { label: 'C3', value: 48 },
+  { label: 'C4 (middle)', value: 60 }, { label: 'E4', value: 64 },
+  { label: 'G4', value: 67 }, { label: 'A4 (440Hz)', value: 69 },
+  { label: 'C5', value: 72 }, { label: 'C6', value: 84 },
+];
+
 export default function TestPage() {
   const sonicRef = useRef(null);
   const nodeIdRef = useRef(2000);
+  const activeNodesRef = useRef(new Set());
   const [booted, setBooted] = useState(false);
   const [booting, setBooting] = useState(false);
   const [log, setLog] = useState([]);
   const [diag, setDiag] = useState(null);
   const diagTimer = useRef(null);
+  const loadedDefsRef = useRef(new Set(SYNTH_DEFS));
+
+  // Explorer state
+  const [selectedSynth, setSelectedSynth] = useState('sonic-pi-prophet');
+  const [explorerNote, setExplorerNote] = useState(60);
+  const [explorerDuration, setExplorerDuration] = useState(3);
+  const [explorerLoading, setExplorerLoading] = useState(false);
 
   const addLog = useCallback((msg) => {
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
@@ -90,8 +151,14 @@ export default function TestPage() {
         addLog(`Ready! SAB=${capabilities.sharedArrayBuffer} COI=${capabilities.crossOriginIsolated}`);
       });
       sonic.on('message', (msg) => {
-        if (msg[0] === '/n_go') addLog(`Node started: ${msg[1]}`);
-        if (msg[0] === '/n_end') addLog(`Node ended: ${msg[1]}`);
+        if (msg[0] === '/n_go') {
+          activeNodesRef.current.add(msg[1]);
+          addLog(`Node started: ${msg[1]}`);
+        }
+        if (msg[0] === '/n_end') {
+          activeNodesRef.current.delete(msg[1]);
+          addLog(`Node ended: ${msg[1]}`);
+        }
         if (msg[0] === '/fail') addLog(`FAIL: ${msg.slice(1).join(' ')}`);
       });
 
@@ -144,8 +211,9 @@ export default function TestPage() {
     try {
       sonic.send('/s_new', synthName, id, 0, 1, ...params);
 
-      // Schedule release
+      // Schedule release — skip if node already freed itself (doneAction:2)
       setTimeout(() => {
+        if (!activeNodesRef.current.has(id)) return;
         try {
           sonic.send('/n_set', id, 'gate', 0);
           addLog(`◼ Released node ${id}`);
@@ -237,6 +305,52 @@ export default function TestPage() {
     addLog('  (use Free All to stop)');
   };
 
+  const playExplorer = useCallback(async () => {
+    const sonic = sonicRef.current;
+    if (!sonic) return;
+
+    // Load synthdef on demand if not already loaded
+    if (!loadedDefsRef.current.has(selectedSynth)) {
+      setExplorerLoading(true);
+      addLog(`Loading ${selectedSynth}...`);
+      try {
+        const result = await sonic.loadSynthDef(selectedSynth);
+        addLog(`  loaded ${result.name} (${result.size} bytes)`);
+        loadedDefsRef.current.add(selectedSynth);
+        await sonic.sync();
+      } catch (e) {
+        addLog(`  FAILED to load: ${e.message}`);
+        setExplorerLoading(false);
+        return;
+      }
+      setExplorerLoading(false);
+    }
+
+    // Noise synths don't use note parameter
+    const isNoise = selectedSynth.includes('noise') || selectedSynth.includes('bnoise');
+    // Drums are short percussive hits
+    const isDrum = selectedSynth.includes('sc808_');
+    // Pads/ambient benefit from longer envelope
+    const isPad = selectedSynth.includes('ambience') || selectedSynth.includes('hollow')
+      || selectedSynth.includes('blade') || selectedSynth.includes('zawa');
+
+    const durationMs = isDrum ? 1500 : explorerDuration * 1000;
+    const attack = isDrum ? 0 : isPad ? 1.5 : 0.05;
+    const sustain = isDrum ? 0 : isPad ? explorerDuration * 0.5 : explorerDuration * 0.6;
+    const release = isDrum ? 0.5 : isPad ? 2 : explorerDuration * 0.3;
+
+    const params = [
+      'amp', 0.4,
+      'attack', attack,
+      'sustain', sustain,
+      'release', release,
+    ];
+    if (!isNoise) params.push('note', explorerNote);
+    if (isPad) params.push('cutoff', 75, 'res', 0.1);
+
+    playNote(selectedSynth, params, durationMs);
+  }, [selectedSynth, explorerNote, explorerDuration, addLog, playNote]);
+
   return (
     <>
       <main>
@@ -309,6 +423,68 @@ export default function TestPage() {
               <button className="layer" onClick={testNoise} disabled={!booted}>
                 <span>Noise</span>
                 <span className="layer-name">bnoise</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Synth Explorer */}
+          <div className="panel-section">
+            <div className="section-label">Synth Explorer</div>
+            <div className="explorer">
+              <div className="explorer-row">
+                <div className="selector-group" style={{ flex: 1 }}>
+                  <label>SynthDef</label>
+                  <select
+                    value={selectedSynth}
+                    onChange={(e) => setSelectedSynth(e.target.value)}
+                    disabled={!booted}
+                  >
+                    {Object.entries(ALL_SYNTHS).map(([group, synths]) => (
+                      <optgroup key={group} label={group}>
+                        {synths.map((s) => (
+                          <option key={s} value={s}>
+                            {s.replace('sonic-pi-', '')}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="explorer-row">
+                <div className="selector-group">
+                  <label>Note</label>
+                  <select
+                    value={explorerNote}
+                    onChange={(e) => setExplorerNote(Number(e.target.value))}
+                    disabled={!booted}
+                  >
+                    {MIDI_NOTES.map((n) => (
+                      <option key={n.value} value={n.value}>{n.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="selector-group">
+                  <label>Duration</label>
+                  <select
+                    value={explorerDuration}
+                    onChange={(e) => setExplorerDuration(Number(e.target.value))}
+                    disabled={!booted}
+                  >
+                    <option value={1}>1s</option>
+                    <option value={2}>2s</option>
+                    <option value={3}>3s</option>
+                    <option value={5}>5s</option>
+                    <option value={8}>8s</option>
+                  </select>
+                </div>
+              </div>
+              <button
+                className="explorer-play"
+                onClick={playExplorer}
+                disabled={!booted || explorerLoading}
+              >
+                {explorerLoading ? 'Loading...' : 'Play'}
               </button>
             </div>
           </div>
