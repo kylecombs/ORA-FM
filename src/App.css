@@ -477,3 +477,22 @@ footer a { color: var(--dim); text-decoration: underline; text-underline-offset:
 .debug-val-ok { color: var(--sage); }
 .debug-val-warn { color: var(--gold); }
 .debug-val-err { color: var(--rose); }
+
+/* ── Test log ────────────────────────────── */
+.test-log {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.55rem;
+  line-height: 1.6;
+  color: var(--dim);
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}
+
+.test-log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
