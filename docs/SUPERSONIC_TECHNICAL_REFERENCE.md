@@ -51,12 +51,15 @@ options.mRealTime = false; // NRT mode - externally driven, no audio driver
 
 In native SuperCollider, `scsynth-nrt` processes an entire score to a file offline. In SuperSonic, it has been modified to process exactly one audio block (128 samples by default) per call from the AudioWorklet's `process()` method. The AudioWorklet calls `process_audio(current_time, ...)` into the WASM binary at audio rate, feeding it queued OSC messages and pulling back rendered audio samples.
 
+Sam Aaron calls this technique **"RTNRT"** — real-time non-real-time. Standard NRT mode processes a complete pre-prepared score at maximum speed with no network interaction. SuperSonic feeds small micro-batches of OSC commands into the NRT engine in real-time, synchronized to the AudioWorklet's `process()` callback.
+
 Why NRT mode instead of the real-time server?
 
 - **No native audio driver**: scsynth cannot open PortAudio/JACK/CoreAudio inside WASM. NRT mode relinquishes control of the audio clock to the external caller (the AudioWorklet).
 - **No `main()` entry point**: WASM modules in AudioWorklets cannot have a `main()`. NRT mode allows initialization via `init_memory(sample_rate)` and frame-by-frame stepping via `process_audio()`.
 - **No thread spawning**: Real-time scsynth spawns its own audio threads. NRT mode avoids this entirely — critical since WASM/AudioWorklet cannot spawn threads.
 - **No dynamic memory in audio path**: Real-time scsynth uses RT-safe allocators. NRT mode allows the WASM heap to be pre-allocated statically.
+- **Inherently single-threaded**: NRT mode does not need multiple threads for batched operation, nor network I/O — exactly matching AudioWorklet constraints.
 
 ---
 
@@ -213,6 +216,12 @@ All core server commands work identically:
 |---------|-------------|
 | `/b_allocFile` | Load audio from inline binary data (FLAC, WAV, OGG, MP3). SuperSonic-only — does not exist in native scsynth. |
 
+### Behavioral Differences from Desktop scsynth
+
+**Zombie synth prevention**: When RT memory is exhausted during UGen construction, desktop scsynth leaves dead synth nodes that never free themselves — no `DoneAction` fires because all units are marked as done at construction time. These "zombie" nodes consume RT memory indefinitely. SuperSonic detects when all units in a synth are dead at construction time and schedules the node for automatic cleanup (equivalent to `doneAction: 2`). This is a no-op when any unit survived construction, preserving upstream behavior exactly.
+
+**SynthDef load error reporting**: When you load a SynthDef referencing an unsupported UGen (e.g., `MouseX`), SuperSonic sends `/fail /d_recv "UGen 'MouseX' not installed."` and does *not* send `/done`. Desktop scsynth silently sends `/done` even when loading fails due to a missing UGen. This means SuperSonic gives you clearer error feedback.
+
 ---
 
 ## UGen Compatibility
@@ -243,9 +252,19 @@ The vast majority of scsynth's UGen library is compiled into the WASM binary:
 | **Disk I/O** | `DiskIn`, `DiskOut`, `VDiskIn` | No filesystem access |
 | **Ableton Link** | `LinkTempo`, `LinkPhase`, `LinkJump` | No network sockets |
 | **Bela hardware** | `AnalogIn`, `AnalogOut`, `DigitalIn`, `DigitalOut`, `DigitalIO`, `MultiplexAnalogIn`, `BelaScopeOut` | No hardware GPIO |
-| **ML/Analysis** | `BeatTrack`, `BeatTrack2`, `KeyTrack`, `Loudness`, `MFCC`, `Onsets`, `SpecFlatness`, `SpecPcile`, `SpecCentroid` | Not compiled into WASM binary |
+| **ML/Analysis** | `BeatTrack`, `BeatTrack2`, `KeyTrack`, `Loudness`, `MFCC`, `Onsets`, `SpecFlatness`, `SpecPcile`, `SpecCentroid` | Not compiled into WASM binary (no fundamental incompatibility — could be added in future builds) |
 
-**Workarounds for mouse/keyboard UGens**: Push JS event data to control buses via `/c_set`, then read them in synths with `In.kr(busNum)`.
+**Total: 23 unsupported UGens** out of hundreds. Everything else works identically.
+
+**Workarounds for mouse/keyboard UGens**: Push JS event data to control buses via `/c_set`, then read them in synths with `In.kr(busNum)`:
+
+```javascript
+// Mouse X → control bus 0
+document.addEventListener('mousemove', (e) => {
+  sonic.send('/c_set', 0, e.clientX / window.innerWidth);
+});
+// In your SynthDef, use In.kr(0) instead of MouseX.kr
+```
 
 ---
 
