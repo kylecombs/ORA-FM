@@ -478,6 +478,43 @@ footer a { color: var(--dim); text-decoration: underline; text-underline-offset:
 .debug-val-warn { color: var(--gold); }
 .debug-val-err { color: var(--rose); }
 
+/* ── Synth Explorer ──────────────────────── */
+.explorer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.explorer-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.explorer-play {
+  width: 100%;
+  padding: 0.6rem;
+  background: var(--lift);
+  border: 1px solid rgba(184, 154, 106, 0.3);
+  border-radius: 10px;
+  color: var(--gold);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.explorer-play:hover:not(:disabled) {
+  background: rgba(184, 154, 106, 0.12);
+  border-color: var(--gold);
+}
+
+.explorer-play:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
 /* ── Test log ────────────────────────────── */
 .test-log {
   max-height: 300px;
