@@ -9,7 +9,7 @@ const NODE_SCHEMA = {
     desc: 'pure tone',
     accent: '#b89a6a',
     synthDef: 'sonic-pi-beep',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:    { label: 'note', min: 24, max: 96,   step: 1,    val: 60 },
@@ -24,7 +24,7 @@ const NODE_SCHEMA = {
     desc: 'sawtooth',
     accent: '#b89a6a',
     synthDef: 'sonic-pi-saw',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:    { label: 'note', min: 24, max: 96,   step: 1,    val: 60 },
@@ -40,7 +40,7 @@ const NODE_SCHEMA = {
     desc: 'pretty bell',
     accent: '#8ab0c8',
     synthDef: 'sonic-pi-pretty_bell',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:    { label: 'note', min: 24, max: 96,  step: 1,    val: 72 },
@@ -55,7 +55,7 @@ const NODE_SCHEMA = {
     desc: 'vibrato synth',
     accent: '#8ab0c8',
     synthDef: 'sonic-pi-blade',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:           { label: 'note',  min: 24, max: 96,  step: 1,    val: 64 },
@@ -73,7 +73,7 @@ const NODE_SCHEMA = {
     desc: 'dark ambience',
     accent: '#7aab88',
     synthDef: 'sonic-pi-dark_ambience',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:        { label: 'note', min: 24, max: 96,   step: 1,    val: 57 },
@@ -92,7 +92,7 @@ const NODE_SCHEMA = {
     desc: 'resonant texture',
     accent: '#7aab88',
     synthDef: 'sonic-pi-hollow',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:    { label: 'note', min: 24, max: 96,   step: 1,    val: 69 },
@@ -109,7 +109,7 @@ const NODE_SCHEMA = {
     desc: 'brown 1/f²',
     accent: '#c08880',
     synthDef: 'sonic-pi-bnoise',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       amp:     { label: 'amp',  min: 0,  max: 1,    step: 0.01, val: 0.08 },
@@ -125,7 +125,7 @@ const NODE_SCHEMA = {
     desc: 'string',
     accent: '#8ab0c8',
     synthDef: 'sonic-pi-pluck',
-    inputs: ['in'],
+    inputs: [],
     outputs: ['out'],
     params: {
       note:    { label: 'note', min: 24, max: 96, step: 1,    val: 60 },
