@@ -462,9 +462,21 @@ export class AmbientEngine {
         workerBaseURL: '/supersonic/workers/',
         sampleBaseURL: '/supersonic/samples/',
         synthdefBaseURL: '/supersonic/synthdefs/',
+        debug: true,
+        debugScsynth: true,
+        debugOscIn: true,
+        debugOscOut: true,
       });
+
+      this.sonic.on('error', (e) => console.error('[SuperSonic error]', e));
+      this.sonic.on('audiocontext:statechange', (e) =>
+        console.log('[AudioContext state]', e.state)
+      );
+
       await this.sonic.init();
       await this.sonic.resume();
+
+      this.onDebugUpdate?.(this.getDiagnostics());
 
       const defs = [
         'sonic-pi-dark_ambience',
@@ -564,5 +576,48 @@ export class AmbientEngine {
       this.startPad(root);
       this._after(2000, () => this.startTexture(root));
     });
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  DIAGNOSTICS
+  // ══════════════════════════════════════════════════════
+  getDiagnostics() {
+    if (!this.sonic) return null;
+
+    const ctx = this.sonic.audioContext;
+    let info = null;
+    try { info = this.sonic.getInfo(); } catch {}
+    let metrics = null;
+    try { metrics = this.sonic.getMetrics(); } catch {}
+    let tree = null;
+    try { tree = this.sonic.getTree(); } catch {}
+
+    return {
+      audioContext: ctx ? {
+        state: ctx.state,
+        sampleRate: ctx.sampleRate,
+        baseLatency: ctx.baseLatency,
+        outputLatency: ctx.outputLatency,
+        currentTime: ctx.currentTime,
+        destination: {
+          channelCount: ctx.destination.channelCount,
+          maxChannelCount: ctx.destination.maxChannelCount,
+          channelInterpretation: ctx.destination.channelInterpretation,
+        },
+      } : null,
+      info,
+      metrics: metrics ? {
+        audioContextState: metrics.audioContextState,
+        scsynthProcessCount: metrics.scsynthProcessCount,
+        scsynthMessagesProcessed: metrics.scsynthMessagesProcessed,
+        scsynthMessagesDropped: metrics.scsynthMessagesDropped,
+        scsynthWasmErrors: metrics.scsynthWasmErrors,
+        oscOutMessagesSent: metrics.oscOutMessagesSent,
+        oscInMessagesReceived: metrics.oscInMessagesReceived,
+        loadedSynthDefs: metrics.loadedSynthDefs,
+      } : null,
+      nodeTree: tree ? { nodeCount: tree.nodeCount } : null,
+      activeNodes: [...this.nodes.entries()].map(([k, v]) => `${k}:${v}`),
+    };
   }
 }

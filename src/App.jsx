@@ -31,6 +31,9 @@ export default function App() {
   const [root, setRoot] = useState(57);
   const [beat, setBeat] = useState(6);
   const [beatLabel, setBeatLabel] = useState('6 Hz theta');
+  const [debugInfo, setDebugInfo] = useState(null);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const debugTimerRef = useRef(null);
 
   // Refs for current values (needed by engine callbacks)
   const rootRef = useRef(root);
@@ -60,6 +63,7 @@ export default function App() {
       setArcElapsed(elapsed);
     };
     engine.onWaveUpdate = (heights) => setBarHeights(heights);
+    engine.onDebugUpdate = (info) => setDebugInfo(info);
     engine.onRunningChange = (isRunning) => {
       setRunning(isRunning);
       if (isRunning) {
@@ -71,6 +75,26 @@ export default function App() {
     return () => {
       if (engine.running) engine.stopAll();
     };
+  }, []);
+
+  // ── Debug polling ──────────────────────────────────────
+  useEffect(() => {
+    if (debugOpen) {
+      const poll = () => {
+        const engine = engineRef.current;
+        if (engine) setDebugInfo(engine.getDiagnostics());
+      };
+      poll();
+      debugTimerRef.current = setInterval(poll, 1000);
+    } else {
+      clearInterval(debugTimerRef.current);
+    }
+    return () => clearInterval(debugTimerRef.current);
+  }, [debugOpen]);
+
+  const handleRefreshDebug = useCallback(() => {
+    const engine = engineRef.current;
+    if (engine) setDebugInfo(engine.getDiagnostics());
   }, []);
 
   // ── Handlers ───────────────────────────────────────────
@@ -315,6 +339,210 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* Debug panel */}
+      <div className="debug-toggle" onClick={() => setDebugOpen((v) => !v)}>
+        {debugOpen ? '▾ Hide Debug' : '▸ Show Debug'}
+      </div>
+      {debugOpen && (
+        <div className="debug-panel">
+          <div className="debug-header">
+            <span className="section-label" style={{ marginBottom: 0 }}>
+              Audio Diagnostics
+            </span>
+            <button className="debug-refresh" onClick={handleRefreshDebug}>
+              Refresh
+            </button>
+          </div>
+          {debugInfo ? (
+            <div className="debug-grid">
+              <div className="debug-section">
+                <div className="debug-section-title">AudioContext</div>
+                {debugInfo.audioContext ? (
+                  <>
+                    <div className="debug-row">
+                      <span>State</span>
+                      <span
+                        className={
+                          debugInfo.audioContext.state === 'running'
+                            ? 'debug-val-ok'
+                            : 'debug-val-warn'
+                        }
+                      >
+                        {debugInfo.audioContext.state}
+                      </span>
+                    </div>
+                    <div className="debug-row">
+                      <span>Sample Rate</span>
+                      <span>{debugInfo.audioContext.sampleRate} Hz</span>
+                    </div>
+                    <div className="debug-row">
+                      <span>Base Latency</span>
+                      <span>
+                        {debugInfo.audioContext.baseLatency != null
+                          ? `${(debugInfo.audioContext.baseLatency * 1000).toFixed(1)} ms`
+                          : 'n/a'}
+                      </span>
+                    </div>
+                    <div className="debug-row">
+                      <span>Output Latency</span>
+                      <span>
+                        {debugInfo.audioContext.outputLatency != null
+                          ? `${(debugInfo.audioContext.outputLatency * 1000).toFixed(1)} ms`
+                          : 'n/a'}
+                      </span>
+                    </div>
+                    <div className="debug-row">
+                      <span>Current Time</span>
+                      <span>{debugInfo.audioContext.currentTime?.toFixed(2)}s</span>
+                    </div>
+                    <div className="debug-row">
+                      <span>Dest Channels</span>
+                      <span>
+                        {debugInfo.audioContext.destination.channelCount} / max{' '}
+                        {debugInfo.audioContext.destination.maxChannelCount}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="debug-row">
+                    <span>Not initialized</span>
+                  </div>
+                )}
+              </div>
+
+              {debugInfo.info && (
+                <div className="debug-section">
+                  <div className="debug-section-title">Engine Info</div>
+                  <div className="debug-row">
+                    <span>WASM Memory</span>
+                    <span>{(debugInfo.info.totalMemory / 1024 / 1024).toFixed(1)} MB</span>
+                  </div>
+                  <div className="debug-row">
+                    <span>Boot Time</span>
+                    <span>
+                      {debugInfo.info.bootTimeMs != null
+                        ? `${debugInfo.info.bootTimeMs.toFixed(0)} ms`
+                        : 'n/a'}
+                    </span>
+                  </div>
+                  {debugInfo.info.capabilities && (
+                    <>
+                      <div className="debug-row">
+                        <span>AudioWorklet</span>
+                        <span
+                          className={
+                            debugInfo.info.capabilities.audioWorklet
+                              ? 'debug-val-ok'
+                              : 'debug-val-err'
+                          }
+                        >
+                          {debugInfo.info.capabilities.audioWorklet ? 'yes' : 'NO'}
+                        </span>
+                      </div>
+                      <div className="debug-row">
+                        <span>SharedArrayBuffer</span>
+                        <span
+                          className={
+                            debugInfo.info.capabilities.sharedArrayBuffer
+                              ? 'debug-val-ok'
+                              : 'debug-val-err'
+                          }
+                        >
+                          {debugInfo.info.capabilities.sharedArrayBuffer ? 'yes' : 'NO'}
+                        </span>
+                      </div>
+                      <div className="debug-row">
+                        <span>Cross-Origin Isolated</span>
+                        <span
+                          className={
+                            debugInfo.info.capabilities.crossOriginIsolated
+                              ? 'debug-val-ok'
+                              : 'debug-val-warn'
+                          }
+                        >
+                          {debugInfo.info.capabilities.crossOriginIsolated ? 'yes' : 'no'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {debugInfo.metrics && (
+                <div className="debug-section">
+                  <div className="debug-section-title">Metrics</div>
+                  <div className="debug-row">
+                    <span>Process Count</span>
+                    <span>{debugInfo.metrics.scsynthProcessCount}</span>
+                  </div>
+                  <div className="debug-row">
+                    <span>OSC Msgs Sent</span>
+                    <span>{debugInfo.metrics.oscOutMessagesSent}</span>
+                  </div>
+                  <div className="debug-row">
+                    <span>Msgs Processed</span>
+                    <span>{debugInfo.metrics.scsynthMessagesProcessed}</span>
+                  </div>
+                  <div className="debug-row">
+                    <span>Msgs Dropped</span>
+                    <span
+                      className={
+                        debugInfo.metrics.scsynthMessagesDropped > 0
+                          ? 'debug-val-err'
+                          : 'debug-val-ok'
+                      }
+                    >
+                      {debugInfo.metrics.scsynthMessagesDropped}
+                    </span>
+                  </div>
+                  <div className="debug-row">
+                    <span>WASM Errors</span>
+                    <span
+                      className={
+                        debugInfo.metrics.scsynthWasmErrors > 0
+                          ? 'debug-val-err'
+                          : 'debug-val-ok'
+                      }
+                    >
+                      {debugInfo.metrics.scsynthWasmErrors}
+                    </span>
+                  </div>
+                  <div className="debug-row">
+                    <span>Loaded SynthDefs</span>
+                    <span>{debugInfo.metrics.loadedSynthDefs}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="debug-section">
+                <div className="debug-section-title">Active Nodes</div>
+                {debugInfo.activeNodes?.length > 0 ? (
+                  debugInfo.activeNodes.map((n) => (
+                    <div className="debug-row" key={n}>
+                      <span>{n}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="debug-row">
+                    <span>none</span>
+                  </div>
+                )}
+                {debugInfo.nodeTree && (
+                  <div className="debug-row">
+                    <span>scsynth node count</span>
+                    <span>{debugInfo.nodeTree.nodeCount}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="debug-row">
+              <span>Engine not initialized — click the orb to boot</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <footer>
         Powered by{' '}
