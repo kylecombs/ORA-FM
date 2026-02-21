@@ -332,11 +332,11 @@ export class AmbientEngine {
     this._every(200, () => {
       if (!this.running) return;
 
-      // Pad filter: 1/f sweep over all three voices
-      const baseCut = filtNoise.get(50, 85);
+      // Pad filter: gentle 1/f sweep over all three voices
+      const baseCut = filtNoise.get(62, 78);
       [0, 1, 2].forEach((i) => {
         const id = this.nodes.get(`pad${i}`);
-        if (id) this.sonic.send('/n_set', id, 'cutoff', baseCut - i * 4);
+        if (id) this.sonic.send('/n_set', id, 'cutoff', baseCut - i * 2);
       });
 
       // Texture: 1/f amp swell + stereo pan drift
