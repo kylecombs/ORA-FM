@@ -1,10 +1,10 @@
 // ════════════════════════════════════════════════════════════
-//  SENSE EFFECTS ENGINE
+//  GRID VIEW ENGINE
 //
-//  Minimal modular-synthesis audio engine for the Sense Effects
-//  node graph. Each graph node maps to a scsynth synth instance.
-//  Nodes that are connected (reachable) to AudioOut play;
-//  disconnected nodes are silent.
+//  Minimal modular-synthesis audio engine for the Grid View
+//  synth/effect graph. Each grid module maps to a scsynth
+//  synth instance. Modules connected (reachable) to AudioOut
+//  play; disconnected modules are silent.
 //
 //  Uses SuperSonic (scsynth WebAssembly) for all audio.
 // ════════════════════════════════════════════════════════════
@@ -22,7 +22,7 @@ const ALL_DEFS = [
   'sonic-pi-bnoise',
 ];
 
-export class SenseEngine {
+export class GridEngine {
   constructor() {
     this.sonic = null;
     this._nextId = 3000;
@@ -45,9 +45,9 @@ export class SenseEngine {
       debugOscOut: true,
     });
 
-    this.sonic.on('error', (e) => console.error('[SenseEngine error]', e));
+    this.sonic.on('error', (e) => console.error('[GridEngine error]', e));
     this.sonic.on('audiocontext:statechange', (e) =>
-      console.log('[SenseEngine ctx]', e.state)
+      console.log('[GridEngine ctx]', e.state)
     );
 
     await this.sonic.init();
