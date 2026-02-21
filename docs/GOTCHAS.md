@@ -121,4 +121,36 @@ Start at 1000+ to avoid colliding with group IDs (we use 1, 2, etc. for groups).
 
 ---
 
+## 6. "/n_set Node not found" After Synth Finishes Playing
+
+**Symptom:** Playing a synth in the Synth Explorer works (you hear sound), but the console shows errors like:
+
+```
+[← OSC] /fail "/n_set", "Node 2019 not found"
+FAILURE IN SERVER /n_set Node 2019 not found
+```
+
+**Root cause:** Sonic Pi SynthDefs use `doneAction: 2`, which tells scsynth to automatically free the synth node when its envelope completes. If the envelope duration (attack + sustain + release) is shorter than the `setTimeout` delay used to send `/n_set gate 0`, the node has already been freed by the time the release message arrives. scsynth responds with a `/fail` because the node no longer exists.
+
+**Fix:** Track active nodes using `/n_end` messages from scsynth, and skip sending `/n_set` to nodes that have already freed themselves:
+
+```javascript
+const activeNodesRef = useRef(new Set());
+
+sonic.on('message', (msg) => {
+  if (msg[0] === '/n_go') activeNodesRef.current.add(msg[1]);
+  if (msg[0] === '/n_end') activeNodesRef.current.delete(msg[1]);
+});
+
+// In the release timeout:
+setTimeout(() => {
+  if (!activeNodesRef.current.has(id)) return; // already freed
+  sonic.send('/n_set', id, 'gate', 0);
+}, durationMs);
+```
+
+**Reference:** `src/TestPage.jsx:71` (activeNodesRef), `src/TestPage.jsx:208-215` (guarded release)
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

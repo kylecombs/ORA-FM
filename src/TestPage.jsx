@@ -69,6 +69,7 @@ const MIDI_NOTES = [
 export default function TestPage() {
   const sonicRef = useRef(null);
   const nodeIdRef = useRef(2000);
+  const activeNodesRef = useRef(new Set());
   const [booted, setBooted] = useState(false);
   const [booting, setBooting] = useState(false);
   const [log, setLog] = useState([]);
@@ -150,8 +151,14 @@ export default function TestPage() {
         addLog(`Ready! SAB=${capabilities.sharedArrayBuffer} COI=${capabilities.crossOriginIsolated}`);
       });
       sonic.on('message', (msg) => {
-        if (msg[0] === '/n_go') addLog(`Node started: ${msg[1]}`);
-        if (msg[0] === '/n_end') addLog(`Node ended: ${msg[1]}`);
+        if (msg[0] === '/n_go') {
+          activeNodesRef.current.add(msg[1]);
+          addLog(`Node started: ${msg[1]}`);
+        }
+        if (msg[0] === '/n_end') {
+          activeNodesRef.current.delete(msg[1]);
+          addLog(`Node ended: ${msg[1]}`);
+        }
         if (msg[0] === '/fail') addLog(`FAIL: ${msg.slice(1).join(' ')}`);
       });
 
@@ -204,8 +211,9 @@ export default function TestPage() {
     try {
       sonic.send('/s_new', synthName, id, 0, 1, ...params);
 
-      // Schedule release
+      // Schedule release — skip if node already freed itself (doneAction:2)
       setTimeout(() => {
+        if (!activeNodesRef.current.has(id)) return;
         try {
           sonic.send('/n_set', id, 'gate', 0);
           addLog(`◼ Released node ${id}`);
