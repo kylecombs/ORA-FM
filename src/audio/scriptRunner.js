@@ -9,7 +9,7 @@
 //  API available inside scripts:
 //
 //    out(value)                    — set the output value
-//    pattern(values, interval)    — cycle through array
+//    pattern(values, durations)   — cycle values with per-step durations
 //    routine(generatorFn)         — generator coroutine
 //    lfo(rate, min, max)          — sine-wave oscillator
 //    ramp(from, to, duration)     — linear ramp
@@ -53,23 +53,31 @@ export class ScriptRunner {
       ctx.timers.add({ id, type });
     }
 
-    function pattern(values, interval) {
+    function pattern(values, durations) {
       if (ctx.stopped) return;
       if (!Array.isArray(values) || values.length === 0) {
         log('pattern: values must be a non-empty array');
         return;
       }
-      const ms = Math.max(10, (interval || 0.5) * 1000);
+      // durations can be a single number or an array of numbers (seconds)
+      const durs = Array.isArray(durations) ? durations : [durations || 0.5];
       let i = 0;
       // Emit first value immediately
       out(values[0]);
       i = 1;
-      const id = setInterval(() => {
+
+      function step() {
         if (ctx.stopped) return;
-        out(values[i % values.length]);
-        i++;
-      }, ms);
-      addTimer(id, 'interval');
+        const ms = Math.max(10, (durs[(i - 1) % durs.length]) * 1000);
+        const id = setTimeout(() => {
+          if (ctx.stopped) return;
+          out(values[i % values.length]);
+          i++;
+          step();
+        }, ms);
+        addTimer(id, 'timeout');
+      }
+      step();
     }
 
     function routine(genFn) {
