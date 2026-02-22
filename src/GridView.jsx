@@ -1,6 +1,46 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
+import { ScriptRunner } from './audio/scriptRunner';
+import CodeMirror from '@uiw/react-codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { createTheme } from '@uiw/codemirror-themes';
+import { tags as t } from '@lezer/highlight';
 import './GridView.css';
+
+// ── CodeMirror theme matching the app's dark palette ─────
+const oraTheme = createTheme({
+  theme: 'dark',
+  settings: {
+    background: '#0c0b0a',
+    foreground: '#d4cfc8',
+    caret: '#c8b060',
+    selection: 'rgba(200, 176, 96, 0.15)',
+    selectionMatch: 'rgba(200, 176, 96, 0.08)',
+    lineHighlight: 'rgba(184, 154, 106, 0.04)',
+    gutterBackground: '#0c0b0a',
+    gutterForeground: '#3a3835',
+    gutterBorder: '#252320',
+  },
+  styles: [
+    { tag: t.comment,        color: '#4a4740' },
+    { tag: t.lineComment,    color: '#4a4740' },
+    { tag: t.blockComment,   color: '#4a4740' },
+    { tag: t.keyword,        color: '#c8b060' },
+    { tag: t.controlKeyword, color: '#c8b060' },
+    { tag: t.operator,       color: '#7a7570' },
+    { tag: t.number,         color: '#8ab0c8' },
+    { tag: t.string,         color: '#7aab88' },
+    { tag: t.variableName,   color: '#d4cfc8' },
+    { tag: t.function(t.variableName), color: '#c08880' },
+    { tag: t.definition(t.variableName), color: '#d4cfc8' },
+    { tag: t.propertyName,   color: '#c08880' },
+    { tag: t.bool,           color: '#8ab0c8' },
+    { tag: t.null,           color: '#8ab0c8' },
+    { tag: t.punctuation,    color: '#5a5550' },
+    { tag: t.brace,          color: '#5a5550' },
+    { tag: t.paren,          color: '#5a5550' },
+  ],
+});
 
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
@@ -215,6 +255,19 @@ const NODE_SCHEMA = {
       mix:      { label: 'mix',   min: 0,    max: 1,  step: 0.01, val: 1 },
     },
   },
+  // ── Script modules ───────────────────────────────────────
+  script: {
+    label: 'Script',
+    desc: 'code & patterns',
+    accent: '#c8b060',
+    synthDef: null,
+    category: 'script',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'val', min: 0, max: 127, step: 0.01, val: 0 },
+    },
+  },
   // ── Control modules ──────────────────────────────────────
   constant: {
     label: 'Constant',
@@ -270,6 +323,12 @@ const MODULE_CATEGORIES = [
     label: 'Effects',
     desc: 'time & space',
     types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger'],
+  },
+  {
+    id: 'scripting',
+    label: 'Scripting',
+    desc: 'code & patterns',
+    types: ['script'],
   },
   {
     id: 'control',
@@ -366,6 +425,15 @@ export default function GridView() {
   const [connecting, setConnecting] = useState(null); // { fromNodeId, fromPortIndex }
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
+  // Module details panel state
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const didDragRef = useRef(false);
+
+  // Script runtime state
+  const scriptRunnerRef = useRef(null);
+  const [runningScripts, setRunningScripts] = useState(new Set());
+  const [scriptLogs, setScriptLogs] = useState({}); // nodeId → string[]
+
   // Instrument panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelSearch, setPanelSearch] = useState('');
@@ -375,7 +443,38 @@ export default function GridView() {
   useEffect(() => {
     engineRef.current = new GridEngine();
     engineRef.current.onStatus = (msg) => setStatus(msg);
-    return () => engineRef.current?.stopAll();
+
+    scriptRunnerRef.current = new ScriptRunner({
+      onOutput: (nodeId, value) => {
+        setNodes((prev) => {
+          const node = prev[nodeId];
+          if (!node) return prev;
+          return {
+            ...prev,
+            [nodeId]: {
+              ...node,
+              params: { ...node.params, value },
+            },
+          };
+        });
+      },
+      onLog: (nodeId, ...args) => {
+        const line = args.map((a) =>
+          typeof a === 'object' ? JSON.stringify(a) : String(a)
+        ).join(' ');
+        setScriptLogs((prev) => {
+          const existing = prev[nodeId] || [];
+          // Keep last 100 lines
+          const next = [...existing, line].slice(-100);
+          return { ...prev, [nodeId]: next };
+        });
+      },
+    });
+
+    return () => {
+      engineRef.current?.stopAll();
+      scriptRunnerRef.current?.stopAll();
+    };
   }, []);
 
   // ── Sync audio with live node set & bus routing ──────
@@ -572,7 +671,7 @@ export default function GridView() {
       if (!sourceNode || !targetNode) continue;
 
       const sourceSchema = NODE_SCHEMA[sourceNode.type];
-      if (sourceSchema?.category !== 'control') continue;
+      if (sourceSchema?.category !== 'control' && sourceSchema?.category !== 'script') continue;
 
       const modKey = `${conn.toNodeId}:${conn.toParam}`;
       const value = sourceNode.params.value ?? 0;
@@ -643,20 +742,23 @@ export default function GridView() {
     for (const [k, def] of Object.entries(schema.params)) {
       params[k] = def.val;
     }
+    const node = {
+      id,
+      type,
+      x: 0,
+      y: 0,
+      params,
+    };
+    if (schema.category === 'script') {
+      node.code = '// Write your script here\n// Output values with: out(value)\n';
+    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
       const row = Math.floor(Math.max(0, count - 1) / 3);
-      return {
-        ...prev,
-        [id]: {
-          id,
-          type,
-          x: 40 + col * 210,
-          y: 40 + row * 220,
-          params,
-        },
-      };
+      node.x = 40 + col * 210;
+      node.y = 40 + row * 220;
+      return { ...prev, [id]: node };
     });
   }, []);
 
@@ -664,6 +766,12 @@ export default function GridView() {
   const removeNode = useCallback(
     (id) => {
       engineRef.current?.stop(id);
+      scriptRunnerRef.current?.stop(id);
+      setRunningScripts((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setNodes((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -672,6 +780,7 @@ export default function GridView() {
       setConnections((prev) =>
         prev.filter((c) => c.fromNodeId !== id && c.toNodeId !== id)
       );
+      setSelectedNodeId((prev) => (prev === id ? null : prev));
     },
     []
   );
@@ -686,6 +795,35 @@ export default function GridView() {
       },
     }));
     engineRef.current?.setParam(nodeId, param, value);
+  }, []);
+
+  // ── Script code change ──────────────────────────────────
+  const handleCodeChange = useCallback((nodeId, code) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], code },
+    }));
+  }, []);
+
+  // ── Script run/stop ───────────────────────────────────
+  const handleRunScript = useCallback((nodeId, code) => {
+    const runner = scriptRunnerRef.current;
+    if (!runner) return;
+    // Clear previous logs for this node
+    setScriptLogs((prev) => ({ ...prev, [nodeId]: [] }));
+    runner.run(nodeId, code);
+    setRunningScripts((prev) => new Set(prev).add(nodeId));
+  }, []);
+
+  const handleStopScript = useCallback((nodeId) => {
+    const runner = scriptRunnerRef.current;
+    if (!runner) return;
+    runner.stop(nodeId);
+    setRunningScripts((prev) => {
+      const next = new Set(prev);
+      next.delete(nodeId);
+      return next;
+    });
   }, []);
 
   // ── Param port click (modulation connect/disconnect) ──
@@ -732,7 +870,8 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview')) return;
+    didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -763,6 +902,7 @@ export default function GridView() {
       const cy = e.clientY - rect.top + canvas.scrollTop;
 
       if (dragId != null) {
+        didDragRef.current = true;
         const x = Math.max(0, cx - dragOffset.current.x);
         const y = Math.max(0, cy - dragOffset.current.y);
         setNodes((prev) => ({
@@ -779,7 +919,13 @@ export default function GridView() {
   );
 
   const onCanvasMouseUp = useCallback(() => {
-    if (dragId != null) setDragId(null);
+    if (dragId != null) {
+      if (!didDragRef.current) {
+        // Click without drag — select the node
+        setSelectedNodeId(dragId);
+      }
+      setDragId(null);
+    }
   }, [dragId]);
 
   // ── Port click (connect/disconnect) ───────────────────
@@ -954,9 +1100,10 @@ export default function GridView() {
     const isAudioOut = node.type === 'audioOut';
     const isFx = schema.category === 'fx';
     const isControl = schema.category === 'control';
+    const isScript = schema.category === 'script';
 
-    // Check if this control module has any modulation connections
-    const hasModOutput = isControl && connections.some(
+    // Check if this control/script module has any modulation connections
+    const hasModOutput = (isControl || isScript) && connections.some(
       (c) => c.fromNodeId === node.id && c.toParam
     );
 
@@ -965,7 +1112,8 @@ export default function GridView() {
     for (const conn of connections) {
       if (conn.toNodeId !== node.id || !conn.toParam) continue;
       const src = nodes[conn.fromNodeId];
-      if (src && NODE_SCHEMA[src.type]?.category === 'control') {
+      const srcCat = NODE_SCHEMA[src?.type]?.category;
+      if (src && (srcCat === 'control' || srcCat === 'script')) {
         modulatedParams[conn.toParam] = src.params.value ?? 0;
       }
     }
@@ -974,7 +1122,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${hasModOutput ? ' live' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${isScript ? ' script' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -1009,7 +1157,7 @@ export default function GridView() {
         ))}
 
         {/* Parameter modulation input ports (left edge, aligned with each param row) */}
-        {!isControl && !isAudioOut && Object.keys(schema.params).map((key, i) => {
+        {!isControl && !isScript && !isAudioOut && Object.keys(schema.params).map((key, i) => {
           const isModulated = key in modulatedParams;
           const showPort = connecting || isModulated;
           if (!showPort) return null;
@@ -1075,8 +1223,19 @@ export default function GridView() {
           </div>
         )}
 
+        {/* Script code preview */}
+        {isScript && (
+          <div
+            className="script-code-preview"
+            onClick={() => setSelectedNodeId(node.id)}
+            title="Click to edit script"
+          >
+            <code>{(node.code || '').split('\n').slice(0, 3).join('\n') || 'Click to edit…'}</code>
+          </div>
+        )}
+
         {/* Live indicator */}
-        {(isLive || hasModOutput) && <div className="node-live-dot" />}
+        {(isLive || hasModOutput || runningScripts.has(node.id)) && <div className="node-live-dot" />}
       </div>
     );
   };
@@ -1214,6 +1373,138 @@ export default function GridView() {
             )}
           </div>
         </div>
+
+        {/* Module Details Panel */}
+        {(() => {
+          const selNode = selectedNodeId != null ? nodes[selectedNodeId] : null;
+          const selSchema = selNode ? NODE_SCHEMA[selNode.type] : null;
+          const isOpen = selNode != null;
+
+          return (
+            <div className={`module-details-panel${isOpen ? ' open' : ''}`}>
+              {selNode && selSchema && (
+                <>
+                  <div className="details-header">
+                    <div className="details-title-row">
+                      <span
+                        className="details-accent-dot"
+                        style={{ background: selSchema.accent }}
+                      />
+                      <span className="details-title">{selSchema.label}</span>
+                      <span className="details-desc">{selSchema.desc}</span>
+                    </div>
+                    <button
+                      className="details-close"
+                      onClick={() => setSelectedNodeId(null)}
+                    >
+                      &times;
+                    </button>
+                  </div>
+
+                  {selSchema.category === 'script' ? (
+                    <div className="details-body">
+                      <div className="script-editor-section">
+                        <div className="script-editor-header">
+                          <span className="script-editor-label">Code</span>
+                          <span className="script-editor-hint">
+                            Write routines &amp; patterns
+                          </span>
+                        </div>
+                        <div className="script-editor-wrap">
+                          <CodeMirror
+                            value={selNode.code || ''}
+                            onChange={(val) => handleCodeChange(selNode.id, val)}
+                            theme={oraTheme}
+                            extensions={[javascript()]}
+                            basicSetup={{
+                              lineNumbers: true,
+                              highlightActiveLineGutter: true,
+                              highlightActiveLine: true,
+                              foldGutter: false,
+                              dropCursor: true,
+                              allowMultipleSelections: false,
+                              bracketMatching: true,
+                              closeBrackets: true,
+                              autocompletion: true,
+                              indentOnInput: true,
+                              tabSize: 2,
+                            }}
+                            className="script-editor-cm"
+                            placeholder="// Write your script here&#10;// Output values with: out(value)"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Run / Stop controls */}
+                      <div className="script-controls">
+                        {runningScripts.has(selNode.id) ? (
+                          <button
+                            className="script-btn script-btn-stop"
+                            onClick={() => handleStopScript(selNode.id)}
+                          >
+                            Stop
+                          </button>
+                        ) : (
+                          <button
+                            className="script-btn script-btn-run"
+                            onClick={() =>
+                              handleRunScript(selNode.id, selNode.code || '')
+                            }
+                          >
+                            Run
+                          </button>
+                        )}
+                        <div className="script-output-live">
+                          <span className="script-output-live-label">out</span>
+                          <span className={`script-output-live-val${runningScripts.has(selNode.id) ? ' active' : ''}`}>
+                            {(selNode.params.value ?? 0).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Console log */}
+                      <div className="script-console">
+                        <div className="script-console-header">
+                          <span className="script-console-label">Console</span>
+                          <button
+                            className="script-console-clear"
+                            onClick={() =>
+                              setScriptLogs((prev) => ({
+                                ...prev,
+                                [selNode.id]: [],
+                              }))
+                            }
+                          >
+                            clear
+                          </button>
+                        </div>
+                        <div className="script-console-output">
+                          {(scriptLogs[selNode.id] || []).map((line, i) => (
+                            <div key={i} className="script-console-line">
+                              {line}
+                            </div>
+                          ))}
+                          {(scriptLogs[selNode.id] || []).length === 0 && (
+                            <div className="script-console-empty">
+                              output will appear here
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="details-body">
+                      <div className="details-placeholder">
+                        Select a Script module to edit code,
+                        or use the node controls directly on the canvas.
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Status bar */}
         <div className="sense-status">
