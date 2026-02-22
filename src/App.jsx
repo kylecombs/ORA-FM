@@ -545,6 +545,10 @@ export default function App() {
       )}
 
       <footer>
+        <a href="/grid">Grid View</a>
+        {' · '}
+        <a href="/test">Test Lab</a>
+        <br />
         Powered by{' '}
         <a
           href="https://sonic-pi.net/supersonic/demo.html"
@@ -554,8 +558,6 @@ export default function App() {
           SuperSonic
         </a>{' '}
         — scsynth WebAssembly by Sam Aaron
-        <br />
-        1/f noise control · pentatonic minor · Bernardi silence rebound · 0.1 Hz phrase cycle
       </footer>
     </>
   );
