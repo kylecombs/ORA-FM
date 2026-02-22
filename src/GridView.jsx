@@ -380,6 +380,7 @@ export default function GridView() {
 
   // ── Sync audio with live node set & bus routing ──────
   const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
+  const prevModRef = useRef({});     // `${nodeId}:${param}` → { busIndex }
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -557,8 +558,13 @@ export default function GridView() {
       engine.reorderFx(fxOrder);
     }
 
-    // ── 10. Apply modulation connections ──
-    // Control modules (e.g. Constant) override target params at the JS level.
+    // ── 10. Apply modulation via control buses ──
+    // Each modulation connection gets a dedicated scsynth control bus.
+    // The source value is written with /c_set, and the target param is
+    // mapped to read from that bus with /n_map — all at the engine level.
+    const prevMod = prevModRef.current;
+    const currentMod = {};
+
     for (const conn of connections) {
       if (!conn.toParam) continue;
       const sourceNode = nodes[conn.fromNodeId];
@@ -568,13 +574,38 @@ export default function GridView() {
       const sourceSchema = NODE_SCHEMA[sourceNode.type];
       if (sourceSchema?.category !== 'control') continue;
 
-      // For constant module, output = its 'value' param
+      const modKey = `${conn.toNodeId}:${conn.toParam}`;
       const value = sourceNode.params.value ?? 0;
 
+      // Allocate a control bus (stable — same key returns same bus)
+      const busIndex = engine.allocControlBus(modKey);
+
+      // Write the current value to the control bus
+      engine.setControlBus(busIndex, value);
+
+      // Map the target synth's param to read from this bus
       if (engine.isPlaying(conn.toNodeId)) {
-        engine.setParam(conn.toNodeId, conn.toParam, value);
+        engine.mapParam(conn.toNodeId, conn.toParam, busIndex);
+      }
+
+      currentMod[modKey] = { busIndex };
+    }
+
+    // Unmap params that are no longer modulated
+    for (const [modKey, info] of Object.entries(prevMod)) {
+      if (!(modKey in currentMod)) {
+        const sepIdx = modKey.indexOf(':');
+        const nodeId = parseInt(modKey.slice(0, sepIdx));
+        const param = modKey.slice(sepIdx + 1);
+        const targetNode = nodes[nodeId];
+        const baseValue = targetNode?.params[param] ?? 0;
+
+        engine.unmapParam(nodeId, param, baseValue);
+        engine.freeControlBus(modKey);
       }
     }
+
+    prevModRef.current = currentMod;
 
     // Save routing state for next sync
     prevRoutingRef.current = nodeRouting;

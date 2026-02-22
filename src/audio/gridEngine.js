@@ -42,6 +42,10 @@ export class GridEngine {
     this._active = new Map(); // graphNodeId → scsynth nodeId
     this.booted = false;
     this.onStatus = null;
+
+    // Control bus allocator (buses 0–4095 available, separate from audio buses)
+    this._nextControlBus = 0;
+    this._controlBuses = new Map(); // allocationKey → busIndex
   }
 
   async boot() {
@@ -152,6 +156,46 @@ export class GridEngine {
     const id = this._active.get(graphId);
     if (id != null) {
       try { this.sonic.send('/n_set', id, param, value); } catch { /* ignore */ }
+    }
+  }
+
+  // ── Control bus methods ──────────────────────────────────
+
+  // Allocate a control bus for a given key (idempotent — returns same bus if key exists)
+  allocControlBus(key) {
+    if (this._controlBuses.has(key)) return this._controlBuses.get(key);
+    const bus = this._nextControlBus++;
+    this._controlBuses.set(key, bus);
+    return bus;
+  }
+
+  // Free a control bus allocation
+  freeControlBus(key) {
+    this._controlBuses.delete(key);
+  }
+
+  // Set the value of a control bus (/c_set)
+  setControlBus(busIndex, value) {
+    if (!this.booted) return;
+    try { this.sonic.send('/c_set', busIndex, value); } catch { /* ignore */ }
+  }
+
+  // Map a synth parameter to read from a control bus (/n_map)
+  mapParam(graphId, param, busIndex) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try { this.sonic.send('/n_map', id, param, busIndex); } catch { /* ignore */ }
+    }
+  }
+
+  // Unmap a parameter from its control bus and restore a fixed value
+  unmapParam(graphId, param, value) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try {
+        this.sonic.send('/n_map', id, param, -1);  // -1 = unmap
+        this.sonic.send('/n_set', id, param, value);
+      } catch { /* ignore */ }
     }
   }
 
