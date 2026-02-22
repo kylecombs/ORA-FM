@@ -1,6 +1,45 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
+import CodeMirror from '@uiw/react-codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { createTheme } from '@uiw/codemirror-themes';
+import { tags as t } from '@lezer/highlight';
 import './GridView.css';
+
+// ── CodeMirror theme matching the app's dark palette ─────
+const oraTheme = createTheme({
+  theme: 'dark',
+  settings: {
+    background: '#0c0b0a',
+    foreground: '#d4cfc8',
+    caret: '#c8b060',
+    selection: 'rgba(200, 176, 96, 0.15)',
+    selectionMatch: 'rgba(200, 176, 96, 0.08)',
+    lineHighlight: 'rgba(184, 154, 106, 0.04)',
+    gutterBackground: '#0c0b0a',
+    gutterForeground: '#3a3835',
+    gutterBorder: '#252320',
+  },
+  styles: [
+    { tag: t.comment,        color: '#4a4740' },
+    { tag: t.lineComment,    color: '#4a4740' },
+    { tag: t.blockComment,   color: '#4a4740' },
+    { tag: t.keyword,        color: '#c8b060' },
+    { tag: t.controlKeyword, color: '#c8b060' },
+    { tag: t.operator,       color: '#7a7570' },
+    { tag: t.number,         color: '#8ab0c8' },
+    { tag: t.string,         color: '#7aab88' },
+    { tag: t.variableName,   color: '#d4cfc8' },
+    { tag: t.function(t.variableName), color: '#c08880' },
+    { tag: t.definition(t.variableName), color: '#d4cfc8' },
+    { tag: t.propertyName,   color: '#c08880' },
+    { tag: t.bool,           color: '#8ab0c8' },
+    { tag: t.null,           color: '#8ab0c8' },
+    { tag: t.punctuation,    color: '#5a5550' },
+    { tag: t.brace,          color: '#5a5550' },
+    { tag: t.paren,          color: '#5a5550' },
+  ],
+});
 
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
@@ -1308,13 +1347,25 @@ export default function GridView() {
                           </span>
                         </div>
                         <div className="script-editor-wrap">
-                          <textarea
-                            className="script-editor"
+                          <CodeMirror
                             value={selNode.code || ''}
-                            onChange={(e) =>
-                              handleCodeChange(selNode.id, e.target.value)
-                            }
-                            spellCheck={false}
+                            onChange={(val) => handleCodeChange(selNode.id, val)}
+                            theme={oraTheme}
+                            extensions={[javascript()]}
+                            basicSetup={{
+                              lineNumbers: true,
+                              highlightActiveLineGutter: true,
+                              highlightActiveLine: true,
+                              foldGutter: false,
+                              dropCursor: true,
+                              allowMultipleSelections: false,
+                              bracketMatching: true,
+                              closeBrackets: true,
+                              autocompletion: true,
+                              indentOnInput: true,
+                              tabSize: 2,
+                            }}
+                            className="script-editor-cm"
                             placeholder="// Write your script here&#10;// Output values with: out(value)"
                           />
                         </div>
