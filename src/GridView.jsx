@@ -215,6 +215,19 @@ const NODE_SCHEMA = {
       mix:      { label: 'mix',   min: 0,    max: 1,  step: 0.01, val: 1 },
     },
   },
+  // ── Control modules ──────────────────────────────────────
+  constant: {
+    label: 'Constant',
+    desc: 'fixed value',
+    accent: '#d4a06a',
+    synthDef: null,
+    category: 'control',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'val', min: 0, max: 127, step: 0.01, val: 60 },
+    },
+  },
   audioOut: {
     label: 'Output',
     desc: 'audio destination',
@@ -258,6 +271,12 @@ const MODULE_CATEGORIES = [
     desc: 'time & space',
     types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger'],
   },
+  {
+    id: 'control',
+    label: 'Control',
+    desc: 'modulation sources',
+    types: ['constant'],
+  },
 ];
 
 // ── Layout constants ──────────────────────────────────────
@@ -274,6 +293,21 @@ function getPortPos(node, portType, portIndex) {
   return { x: node.x, y };
 }
 
+// ── Parameter modulation port positions ──────────────────
+// Params render after the header: 33px header + 6px padding + 18px per row
+const PARAM_START_Y = HEADER_H + 1 + 6; // header + border + top padding
+const PARAM_ROW_H = 18;
+
+function getParamPortPos(node, schema, paramKey) {
+  const paramKeys = Object.keys(schema.params);
+  const idx = paramKeys.indexOf(paramKey);
+  if (idx === -1) return { x: node.x, y: node.y };
+  return {
+    x: node.x,
+    y: node.y + PARAM_START_Y + idx * PARAM_ROW_H + PARAM_ROW_H / 2,
+  };
+}
+
 // ── Compute which nodes are "live" (reachable from AudioOut) ──
 function computeLiveNodes(nodes, connections) {
   const outNode = Object.values(nodes).find((n) => n.type === 'audioOut');
@@ -286,9 +320,10 @@ function computeLiveNodes(nodes, connections) {
     const cur = queue.shift();
     if (live.has(cur)) continue;
     live.add(cur);
-    // Find all nodes whose output connects to this node's input
+    // Find all nodes whose output connects to this node's audio input
+    // (skip modulation connections — they don't carry audio)
     connections
-      .filter((c) => c.toNodeId === cur)
+      .filter((c) => c.toNodeId === cur && !c.toParam)
       .forEach((c) => queue.push(c.fromNodeId));
   }
 
@@ -357,9 +392,11 @@ export default function GridView() {
     // ── 1. Assign audio buses to each connection ──
     // Connections to AudioOut use bus 0 (hardware out).
     // All other connections get a private bus (16+).
+    // Skip modulation connections (toParam) — they don't route audio.
     const connBus = {};
     let nextBus = 16;
     for (const conn of connections) {
+      if (conn.toParam) continue;
       const fromLive = live.has(conn.fromNodeId);
       const toLive = live.has(conn.toNodeId) || conn.toNodeId === outNode.id;
       if (!fromLive || !toLive) continue;
@@ -379,17 +416,17 @@ export default function GridView() {
       const schema = NODE_SCHEMA[node.type];
       const isFx = schema.category === 'fx';
 
-      // Outgoing connection from this node's output
+      // Outgoing audio connection from this node's output
       const outConn = connections.find(
-        (c) => c.fromNodeId === id && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
+        (c) => c.fromNodeId === id && !c.toParam && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
       );
       const outBus = outConn ? (connBus[outConn.id] ?? 0) : 0;
 
-      // Incoming connection to this node's input (only for FX)
+      // Incoming audio connection to this node's input (only for FX)
       let inBus;
       if (isFx) {
         const inConn = connections.find(
-          (c) => c.toNodeId === id && live.has(c.fromNodeId)
+          (c) => c.toNodeId === id && !c.toParam && live.has(c.fromNodeId)
         );
         inBus = inConn ? (connBus[inConn.id] ?? 0) : 0;
       }
@@ -409,7 +446,7 @@ export default function GridView() {
       while (current != null && !visited.has(current)) {
         visited.add(current);
         const conn = connections.find(
-          (c) => c.fromNodeId === current && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
+          (c) => c.fromNodeId === current && !c.toParam && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
         );
         if (!conn) break;
         if (conn.toNodeId === outNode.id) {
@@ -443,7 +480,7 @@ export default function GridView() {
     let safety = remaining.size + 1;
     while (remaining.size > 0 && safety-- > 0) {
       for (const id of remaining) {
-        const inConn = connections.find((c) => c.toNodeId === id);
+        const inConn = connections.find((c) => c.toNodeId === id && !c.toParam);
         if (!inConn || placed.has(inConn.fromNodeId)) {
           fxOrder.push(id);
           remaining.delete(id);
@@ -518,6 +555,25 @@ export default function GridView() {
     // ── 9. Reorder FX in scsynth node tree ──
     if (fxOrder.length > 1) {
       engine.reorderFx(fxOrder);
+    }
+
+    // ── 10. Apply modulation connections ──
+    // Control modules (e.g. Constant) override target params at the JS level.
+    for (const conn of connections) {
+      if (!conn.toParam) continue;
+      const sourceNode = nodes[conn.fromNodeId];
+      const targetNode = nodes[conn.toNodeId];
+      if (!sourceNode || !targetNode) continue;
+
+      const sourceSchema = NODE_SCHEMA[sourceNode.type];
+      if (sourceSchema?.category !== 'control') continue;
+
+      // For constant module, output = its 'value' param
+      const value = sourceNode.params.value ?? 0;
+
+      if (engine.isPlaying(conn.toNodeId)) {
+        engine.setParam(conn.toNodeId, conn.toParam, value);
+      }
     }
 
     // Save routing state for next sync
@@ -600,6 +656,48 @@ export default function GridView() {
     }));
     engineRef.current?.setParam(nodeId, param, value);
   }, []);
+
+  // ── Param port click (modulation connect/disconnect) ──
+  const handleParamPortClick = useCallback(
+    (e, nodeId, paramKey) => {
+      e.stopPropagation();
+
+      if (connecting) {
+        // Completing a modulation connection
+        if (connecting.fromNodeId === nodeId) {
+          setConnecting(null);
+          return;
+        }
+
+        // Remove any existing modulation to this param, then add new one
+        setConnections((prev) => {
+          const filtered = prev.filter(
+            (c) => !(c.toNodeId === nodeId && c.toParam === paramKey)
+          );
+          return [
+            ...filtered,
+            {
+              id: connId.current++,
+              fromNodeId: connecting.fromNodeId,
+              fromPortIndex: connecting.fromPortIndex,
+              toNodeId: nodeId,
+              toParam: paramKey,
+              toPortIndex: -1,
+            },
+          ];
+        });
+        setConnecting(null);
+      } else {
+        // Clicking a modulated param port disconnects it
+        setConnections((prev) =>
+          prev.filter(
+            (c) => !(c.toNodeId === nodeId && c.toParam === paramKey)
+          )
+        );
+      }
+    },
+    [connecting]
+  );
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
@@ -762,24 +860,32 @@ export default function GridView() {
   const renderCables = () => {
     const paths = [];
 
-    // Existing connections
+    // Existing connections (audio + modulation)
     for (const conn of connections) {
       const fromNode = nodes[conn.fromNodeId];
       const toNode = nodes[conn.toNodeId];
       if (!fromNode || !toNode) continue;
 
       const from = getPortPos(fromNode, 'output', conn.fromPortIndex);
-      const to = getPortPos(toNode, 'input', conn.toPortIndex);
+      const toSchema = NODE_SCHEMA[toNode.type];
+
+      // Modulation cables target a param port; audio cables target an input port
+      const to = conn.toParam
+        ? getParamPortPos(toNode, toSchema, conn.toParam)
+        : getPortPos(toNode, 'input', conn.toPortIndex);
+
       const accent = NODE_SCHEMA[fromNode.type]?.accent || '#7a7570';
+      const isMod = !!conn.toParam;
 
       paths.push(
         <path
           key={conn.id}
           d={cablePath(from.x, from.y, to.x, to.y)}
           stroke={accent}
-          strokeWidth={2.5}
+          strokeWidth={isMod ? 1.5 : 2.5}
           fill="none"
-          opacity={0.7}
+          opacity={isMod ? 0.6 : 0.7}
+          strokeDasharray={isMod ? '4 3' : undefined}
           className="sense-cable"
         />
       );
@@ -816,12 +922,28 @@ export default function GridView() {
     const isLive = live.has(node.id);
     const isAudioOut = node.type === 'audioOut';
     const isFx = schema.category === 'fx';
+    const isControl = schema.category === 'control';
+
+    // Check if this control module has any modulation connections
+    const hasModOutput = isControl && connections.some(
+      (c) => c.fromNodeId === node.id && c.toParam
+    );
+
+    // Build set of modulated params on this node
+    const modulatedParams = {};
+    for (const conn of connections) {
+      if (conn.toNodeId !== node.id || !conn.toParam) continue;
+      const src = nodes[conn.fromNodeId];
+      if (src && NODE_SCHEMA[src.type]?.category === 'control') {
+        modulatedParams[conn.toParam] = src.params.value ?? 0;
+      }
+    }
 
     return (
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${hasModOutput ? ' live' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -829,7 +951,7 @@ export default function GridView() {
         }}
         onMouseDown={(e) => startDrag(e, node.id)}
       >
-        {/* Input ports */}
+        {/* Audio input ports */}
         {schema.inputs.map((name, i) => (
           <div
             key={`in-${i}`}
@@ -855,6 +977,23 @@ export default function GridView() {
           </div>
         ))}
 
+        {/* Parameter modulation input ports (left edge, aligned with each param row) */}
+        {!isControl && !isAudioOut && Object.keys(schema.params).map((key, i) => {
+          const isModulated = key in modulatedParams;
+          const showPort = connecting || isModulated;
+          if (!showPort) return null;
+
+          return (
+            <div
+              key={`mod-${key}`}
+              className={`node-port mod-input${connecting ? ' connectable' : ''}${isModulated ? ' modulated' : ''}`}
+              style={{ top: PARAM_START_Y + i * PARAM_ROW_H + PARAM_ROW_H / 2 - 4 }}
+              onClick={(e) => handleParamPortClick(e, node.id, key)}
+              title={`mod: ${schema.params[key].label}`}
+            />
+          );
+        })}
+
         {/* Header */}
         <div className="node-header">
           <span className="node-type-label">{schema.label}</span>
@@ -873,34 +1012,40 @@ export default function GridView() {
         {/* Parameters */}
         {Object.keys(schema.params).length > 0 && (
           <div className="node-params">
-            {Object.entries(schema.params).map(([key, def]) => (
-              <div className="node-param" key={key}>
-                <span className="param-label">{def.label}</span>
-                <input
-                  type="range"
-                  min={def.min}
-                  max={def.max}
-                  step={def.step}
-                  value={node.params[key] ?? def.val}
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value);
-                    handleParamChange(node.id, key, v);
-                  }}
-                />
-                <span className="param-val">
-                  {(node.params[key] ?? def.val) >= 100
-                    ? Math.round(node.params[key] ?? def.val)
-                    : (node.params[key] ?? def.val).toFixed(
-                        def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                      )}
-                </span>
-              </div>
-            ))}
+            {Object.entries(schema.params).map(([key, def]) => {
+              const isModulated = key in modulatedParams;
+              const displayVal = isModulated ? modulatedParams[key] : (node.params[key] ?? def.val);
+
+              return (
+                <div className={`node-param${isModulated ? ' modulated' : ''}`} key={key}>
+                  <span className="param-label">{def.label}</span>
+                  <input
+                    type="range"
+                    min={def.min}
+                    max={def.max}
+                    step={def.step}
+                    value={isModulated ? modulatedParams[key] : (node.params[key] ?? def.val)}
+                    disabled={isModulated}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      handleParamChange(node.id, key, v);
+                    }}
+                  />
+                  <span className="param-val">
+                    {displayVal >= 100
+                      ? Math.round(displayVal)
+                      : displayVal.toFixed(
+                          def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                        )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
 
         {/* Live indicator */}
-        {isLive && <div className="node-live-dot" />}
+        {(isLive || hasModOutput) && <div className="node-live-dot" />}
       </div>
     );
   };
