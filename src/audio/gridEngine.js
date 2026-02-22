@@ -6,12 +6,16 @@
 //  synth instance. Modules connected (reachable) to AudioOut
 //  play; disconnected modules are silent.
 //
+//  Source synths live in Group 1 (processed first).
+//  FX synths live in Group 2 (processed after sources).
+//  Audio buses 16+ are used for routing between nodes.
+//
 //  Uses SuperSonic (scsynth WebAssembly) for all audio.
 // ════════════════════════════════════════════════════════════
 
 import { SuperSonic } from 'supersonic-scsynth';
 
-const ALL_DEFS = [
+const SOURCE_DEFS = [
   'sonic-pi-beep',
   'sonic-pi-saw',
   'sonic-pi-pretty_bell',
@@ -20,6 +24,15 @@ const ALL_DEFS = [
   'sonic-pi-hollow',
   'sonic-pi-blade',
   'sonic-pi-bnoise',
+];
+
+const FX_DEFS = [
+  'sonic-pi-fx_reverb',
+  'sonic-pi-fx_echo',
+  'sonic-pi-fx_lpf',
+  'sonic-pi-fx_hpf',
+  'sonic-pi-fx_distortion',
+  'sonic-pi-fx_flanger',
 ];
 
 export class GridEngine {
@@ -53,10 +66,13 @@ export class GridEngine {
     await this.sonic.init();
     await this.sonic.resume();
 
-    // Create default group
+    // Group 1: source synths (processed first)
     this.sonic.send('/g_new', 1, 0, 0);
+    // Group 2: FX synths (processed after sources)
+    this.sonic.send('/g_new', 2, 3, 1);
 
-    for (const def of ALL_DEFS) {
+    const allDefs = [...SOURCE_DEFS, ...FX_DEFS];
+    for (const def of allDefs) {
       this.onStatus?.(`Loading ${def.replace('sonic-pi-', '')}…`);
       await this.sonic.loadSynthDef(def);
     }
@@ -65,7 +81,7 @@ export class GridEngine {
     this.onStatus?.('Ready · add modules and connect to Output');
   }
 
-  // Start a synth for a graph node
+  // Start a source synth (group 1)
   play(graphId, synthDef, params) {
     if (!this.booted || !synthDef) return;
     if (this._active.has(graphId)) return; // already playing
@@ -78,7 +94,39 @@ export class GridEngine {
       flat.push(k, v);
     }
 
+    // addAction 0 = addToHead, target = group 1
     this.sonic.send('/s_new', synthDef, id, 0, 1, ...flat);
+  }
+
+  // Start an FX synth (group 2, added to tail for correct chain ordering)
+  playFx(graphId, synthDef, params) {
+    if (!this.booted || !synthDef) return;
+    if (this._active.has(graphId)) return;
+
+    const id = this._nextId++;
+    this._active.set(graphId, id);
+
+    const flat = [];
+    for (const [k, v] of Object.entries(params)) {
+      flat.push(k, v);
+    }
+
+    // addAction 1 = addToTail of group 2
+    this.sonic.send('/s_new', synthDef, id, 1, 2, ...flat);
+  }
+
+  // Reorder FX nodes in group 2 to match the desired chain order.
+  // fxGraphIds should be in processing order (closest to source first).
+  reorderFx(fxGraphIds) {
+    if (fxGraphIds.length < 2) return;
+
+    for (let i = 1; i < fxGraphIds.length; i++) {
+      const thisId = this._active.get(fxGraphIds[i]);
+      const prevId = this._active.get(fxGraphIds[i - 1]);
+      if (thisId != null && prevId != null) {
+        this.sonic.send('/n_after', thisId, prevId);
+      }
+    }
   }
 
   // Stop a graph node's synth

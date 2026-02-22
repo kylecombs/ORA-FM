@@ -134,6 +134,87 @@ const NODE_SCHEMA = {
       release: { label: 'rel',  min: 0,  max: 5,  step: 0.1,  val: 1 },
     },
   },
+  // ── FX modules ─────────────────────────────────────────
+  fx_reverb: {
+    label: 'Reverb',
+    desc: 'room reverb',
+    accent: '#9b7abf',
+    synthDef: 'sonic-pi-fx_reverb',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      mix:  { label: 'mix',  min: 0, max: 1, step: 0.01, val: 0.4 },
+      room: { label: 'room', min: 0, max: 1, step: 0.01, val: 0.6 },
+      damp: { label: 'damp', min: 0, max: 1, step: 0.01, val: 0.5 },
+    },
+  },
+  fx_echo: {
+    label: 'Echo',
+    desc: 'delay + feedback',
+    accent: '#9b7abf',
+    synthDef: 'sonic-pi-fx_echo',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      mix:   { label: 'mix',   min: 0,    max: 1, step: 0.01, val: 1 },
+      phase: { label: 'time',  min: 0.01, max: 2, step: 0.01, val: 0.25 },
+      decay: { label: 'decay', min: 0,    max: 8, step: 0.1,  val: 2 },
+    },
+  },
+  fx_lpf: {
+    label: 'LPF',
+    desc: 'low-pass filter',
+    accent: '#bf9b7a',
+    synthDef: 'sonic-pi-fx_lpf',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      cutoff: { label: 'cut', min: 0, max: 130, step: 1, val: 80 },
+    },
+  },
+  fx_hpf: {
+    label: 'HPF',
+    desc: 'high-pass filter',
+    accent: '#bf9b7a',
+    synthDef: 'sonic-pi-fx_hpf',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      cutoff: { label: 'cut', min: 0, max: 130, step: 1, val: 30 },
+    },
+  },
+  fx_distortion: {
+    label: 'Distort',
+    desc: 'distortion',
+    accent: '#bf7a7a',
+    synthDef: 'sonic-pi-fx_distortion',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      distort: { label: 'dist', min: 0, max: 1,  step: 0.01, val: 0.5 },
+      mix:     { label: 'mix',  min: 0, max: 1,  step: 0.01, val: 1 },
+    },
+  },
+  fx_flanger: {
+    label: 'Flanger',
+    desc: 'flanger',
+    accent: '#7abfbf',
+    synthDef: 'sonic-pi-fx_flanger',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      phase:    { label: 'phase', min: 0,    max: 10, step: 0.1,  val: 4 },
+      depth:    { label: 'depth', min: 0,    max: 5,  step: 0.1,  val: 5 },
+      feedback: { label: 'fb',    min: 0,    max: 1,  step: 0.01, val: 0 },
+      mix:      { label: 'mix',   min: 0,    max: 1,  step: 0.01, val: 1 },
+    },
+  },
   audioOut: {
     label: 'Output',
     desc: 'audio destination',
@@ -223,51 +304,185 @@ export default function GridView() {
     return () => engineRef.current?.stopAll();
   }, []);
 
-  // ── Sync audio with live node set ─────────────────────
+  // ── Sync audio with live node set & bus routing ──────
+  const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
+
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine?.booted) return;
 
     const live = computeLiveNodes(nodes, connections);
-
-    // Find AudioOut node for pan routing
     const outNode = Object.values(nodes).find((n) => n.type === 'audioOut');
+    if (!outNode) return;
 
-    // Start nodes that should be playing
-    for (const id of live) {
-      const node = nodes[id];
-      if (!node) continue;
-      const schema = NODE_SCHEMA[node.type];
-      if (!schema?.synthDef) continue;
+    // ── 1. Assign audio buses to each connection ──
+    // Connections to AudioOut use bus 0 (hardware out).
+    // All other connections get a private bus (16+).
+    const connBus = {};
+    let nextBus = 16;
+    for (const conn of connections) {
+      const fromLive = live.has(conn.fromNodeId);
+      const toLive = live.has(conn.toNodeId) || conn.toNodeId === outNode.id;
+      if (!fromLive || !toLive) continue;
 
-      // Determine pan from connection to AudioOut
-      let pan = 0;
-      if (outNode) {
-        const toL = connections.some(
-          (c) => c.toNodeId === outNode.id && c.toPortIndex === 0 && c.fromNodeId === id
-        );
-        const toR = connections.some(
-          (c) => c.toNodeId === outNode.id && c.toPortIndex === 1 && c.fromNodeId === id
-        );
-        if (toL && !toR) pan = -0.8;
-        else if (toR && !toL) pan = 0.8;
-        else pan = 0;
-      }
-
-      if (!engine.isPlaying(id)) {
-        engine.play(id, schema.synthDef, { ...node.params, pan });
+      if (conn.toNodeId === outNode.id) {
+        connBus[conn.id] = 0;
       } else {
-        engine.setParam(id, 'pan', pan);
+        connBus[conn.id] = nextBus;
+        nextBus += 2; // stereo pair
       }
     }
 
-    // Stop nodes that should not be playing
+    // ── 2. Compute per-node routing ──
+    const nodeRouting = {}; // nodeId → { outBus, inBus, isFx }
+    for (const id of live) {
+      const node = nodes[id];
+      const schema = NODE_SCHEMA[node.type];
+      const isFx = schema.category === 'fx';
+
+      // Outgoing connection from this node's output
+      const outConn = connections.find(
+        (c) => c.fromNodeId === id && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
+      );
+      const outBus = outConn ? (connBus[outConn.id] ?? 0) : 0;
+
+      // Incoming connection to this node's input (only for FX)
+      let inBus;
+      if (isFx) {
+        const inConn = connections.find(
+          (c) => c.toNodeId === id && live.has(c.fromNodeId)
+        );
+        inBus = inConn ? (connBus[inConn.id] ?? 0) : 0;
+      }
+
+      nodeRouting[id] = { outBus, inBus, isFx };
+    }
+
+    // ── 3. Compute pan for source nodes ──
+    // Trace each source's chain to AudioOut to find which port it reaches.
+    for (const id of live) {
+      const routing = nodeRouting[id];
+      if (routing.isFx) continue;
+
+      let current = id;
+      let audioOutPort = null;
+      const visited = new Set();
+      while (current != null && !visited.has(current)) {
+        visited.add(current);
+        const conn = connections.find(
+          (c) => c.fromNodeId === current && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
+        );
+        if (!conn) break;
+        if (conn.toNodeId === outNode.id) {
+          audioOutPort = conn.toPortIndex;
+          break;
+        }
+        current = conn.toNodeId;
+      }
+
+      if (audioOutPort === 0) routing.pan = -0.8;
+      else if (audioOutPort === 1) routing.pan = 0.8;
+      else routing.pan = 0;
+    }
+
+    // ── 4. Build topological play order (sources first, then FX in chain order) ──
+    const sources = [];
+    const fxSet = new Set();
+    for (const id of live) {
+      if (nodeRouting[id].isFx) {
+        fxSet.add(id);
+      } else {
+        sources.push(id);
+      }
+    }
+
+    // Topological sort of FX: repeatedly pick FX whose upstream is already placed
+    const fxOrder = [];
+    const remaining = new Set(fxSet);
+    const placed = new Set(sources);
+    placed.add(outNode.id);
+    let safety = remaining.size + 1;
+    while (remaining.size > 0 && safety-- > 0) {
+      for (const id of remaining) {
+        const inConn = connections.find((c) => c.toNodeId === id);
+        if (!inConn || placed.has(inConn.fromNodeId)) {
+          fxOrder.push(id);
+          remaining.delete(id);
+          placed.add(id);
+        }
+      }
+    }
+
+    // ── 5. Stop nodes that should not be playing ──
     for (const id of Object.keys(nodes)) {
       const nid = parseInt(id);
       if (!live.has(nid) && engine.isPlaying(nid)) {
         engine.stop(nid);
       }
     }
+
+    // ── 6. Stop FX whose routing changed (need restart for correct ordering) ──
+    const prevRouting = prevRoutingRef.current;
+    for (const id of fxOrder) {
+      if (engine.isPlaying(id)) {
+        const prev = prevRouting[id];
+        const cur = nodeRouting[id];
+        if (!prev || prev.inBus !== cur.inBus || prev.outBus !== cur.outBus) {
+          engine.stop(id);
+        }
+      }
+    }
+
+    // ── 7. Play / update source nodes ──
+    for (const id of sources) {
+      const node = nodes[id];
+      const schema = NODE_SCHEMA[node.type];
+      if (!schema?.synthDef) continue;
+
+      const routing = nodeRouting[id];
+      const pan = routing.pan ?? 0;
+
+      if (!engine.isPlaying(id)) {
+        engine.play(id, schema.synthDef, {
+          ...node.params,
+          pan,
+          out_bus: routing.outBus,
+        });
+      } else {
+        engine.setParam(id, 'pan', pan);
+        engine.setParam(id, 'out_bus', routing.outBus);
+      }
+    }
+
+    // ── 8. Play / update FX nodes (in chain order) ──
+    for (const id of fxOrder) {
+      const node = nodes[id];
+      const schema = NODE_SCHEMA[node.type];
+      if (!schema?.synthDef) continue;
+
+      const routing = nodeRouting[id];
+
+      if (!engine.isPlaying(id)) {
+        engine.playFx(id, schema.synthDef, {
+          ...node.params,
+          in_bus: routing.inBus,
+          out_bus: routing.outBus,
+        });
+      } else {
+        // Update FX params (bus routing unchanged, just tweak params)
+        for (const [k, v] of Object.entries(node.params)) {
+          engine.setParam(id, k, v);
+        }
+      }
+    }
+
+    // ── 9. Reorder FX in scsynth node tree ──
+    if (fxOrder.length > 1) {
+      engine.reorderFx(fxOrder);
+    }
+
+    // Save routing state for next sync
+    prevRoutingRef.current = nodeRouting;
   }, [nodes, connections]);
 
   // ── Boot engine ───────────────────────────────────────
@@ -530,12 +745,13 @@ export default function GridView() {
     const live = computeLiveNodes(nodes, connections);
     const isLive = live.has(node.id);
     const isAudioOut = node.type === 'audioOut';
+    const isFx = schema.category === 'fx';
 
     return (
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -641,12 +857,30 @@ export default function GridView() {
 
           <div className="toolbar-divider" />
 
+          {/* Source synths */}
           {Object.entries(NODE_SCHEMA)
-            .filter(([type]) => type !== 'audioOut')
+            .filter(([type, s]) => type !== 'audioOut' && s.category !== 'fx')
             .map(([type, schema]) => (
               <button
                 key={type}
                 className="toolbar-btn add-btn"
+                style={{ '--btn-accent': schema.accent }}
+                onClick={() => addNode(type)}
+                disabled={!booted}
+              >
+                <span className="add-plus">+</span> {schema.label}
+              </button>
+            ))}
+
+          <div className="toolbar-divider" />
+
+          {/* FX modules */}
+          {Object.entries(NODE_SCHEMA)
+            .filter(([, s]) => s.category === 'fx')
+            .map(([type, schema]) => (
+              <button
+                key={type}
+                className="toolbar-btn add-btn fx-btn"
                 style={{ '--btn-accent': schema.accent }}
                 onClick={() => addNode(type)}
                 disabled={!booted}
