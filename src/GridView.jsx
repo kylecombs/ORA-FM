@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
 import './GridView.css';
 
@@ -226,6 +226,40 @@ const NODE_SCHEMA = {
   },
 };
 
+// ── Module categories for the instrument panel ───────────
+const MODULE_CATEGORIES = [
+  {
+    id: 'oscillators',
+    label: 'Oscillators',
+    desc: 'basic waveforms',
+    types: ['sine', 'saw'],
+  },
+  {
+    id: 'instruments',
+    label: 'Instruments',
+    desc: 'melodic voices',
+    types: ['bell', 'blade', 'pluck'],
+  },
+  {
+    id: 'textures',
+    label: 'Textures',
+    desc: 'pads & noise',
+    types: ['pad', 'hollow', 'noise'],
+  },
+  {
+    id: 'filters',
+    label: 'Filters',
+    desc: 'frequency shaping',
+    types: ['fx_lpf', 'fx_hpf'],
+  },
+  {
+    id: 'fx',
+    label: 'Effects',
+    desc: 'time & space',
+    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger'],
+  },
+];
+
 // ── Layout constants ──────────────────────────────────────
 const NODE_W = 186;
 const HEADER_H = 32;
@@ -296,6 +330,11 @@ export default function GridView() {
   // Connection state
   const [connecting, setConnecting] = useState(null); // { fromNodeId, fromPortIndex }
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  // Instrument panel state
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelSearch, setPanelSearch] = useState('');
+  const [collapsedSections, setCollapsedSections] = useState({});
 
   // ── Engine setup ──────────────────────────────────────
   useEffect(() => {
@@ -688,6 +727,37 @@ export default function GridView() {
     [connecting]
   );
 
+  // ── Panel helpers ────────────────────────────────────
+  const toggleSection = useCallback((sectionId) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  }, []);
+
+  const filteredCategories = useMemo(() => {
+    const q = panelSearch.toLowerCase().trim();
+    if (!q) return MODULE_CATEGORIES;
+    return MODULE_CATEGORIES.map((cat) => ({
+      ...cat,
+      types: cat.types.filter((type) => {
+        const schema = NODE_SCHEMA[type];
+        return (
+          schema.label.toLowerCase().includes(q) ||
+          schema.desc.toLowerCase().includes(q) ||
+          cat.label.toLowerCase().includes(q)
+        );
+      }),
+    })).filter((cat) => cat.types.length > 0);
+  }, [panelSearch]);
+
+  const handlePanelAdd = useCallback(
+    (type) => {
+      addNode(type);
+    },
+    [addNode]
+  );
+
   // ── Render helpers ────────────────────────────────────
   const renderCables = () => {
     const paths = [];
@@ -857,37 +927,13 @@ export default function GridView() {
 
           <div className="toolbar-divider" />
 
-          {/* Source synths */}
-          {Object.entries(NODE_SCHEMA)
-            .filter(([type, s]) => type !== 'audioOut' && s.category !== 'fx')
-            .map(([type, schema]) => (
-              <button
-                key={type}
-                className="toolbar-btn add-btn"
-                style={{ '--btn-accent': schema.accent }}
-                onClick={() => addNode(type)}
-                disabled={!booted}
-              >
-                <span className="add-plus">+</span> {schema.label}
-              </button>
-            ))}
-
-          <div className="toolbar-divider" />
-
-          {/* FX modules */}
-          {Object.entries(NODE_SCHEMA)
-            .filter(([, s]) => s.category === 'fx')
-            .map(([type, schema]) => (
-              <button
-                key={type}
-                className="toolbar-btn add-btn fx-btn"
-                style={{ '--btn-accent': schema.accent }}
-                onClick={() => addNode(type)}
-                disabled={!booted}
-              >
-                <span className="add-plus">+</span> {schema.label}
-              </button>
-            ))}
+          <button
+            className={`toolbar-btn panel-toggle${panelOpen ? ' active' : ''}`}
+            onClick={() => setPanelOpen((p) => !p)}
+            disabled={!booted}
+          >
+            {panelOpen ? '— Hide Modules' : '+ Add Module'}
+          </button>
         </div>
 
         {/* Canvas */}
@@ -910,9 +956,87 @@ export default function GridView() {
           )}
           {booted && Object.keys(nodes).length === 1 && (
             <div className="canvas-hint">
-              Add modules from the toolbar, then drag cables from output ports to the Output node
+              Click "+ Add Module" to open the module panel, then drag cables between ports
             </div>
           )}
+        </div>
+
+        {/* Instrument Panel */}
+        <div className={`instrument-panel${panelOpen ? ' open' : ''}`}>
+          <div className="panel-header">
+            <span className="panel-title">Modules</span>
+            <button
+              className="panel-close"
+              onClick={() => setPanelOpen(false)}
+            >
+              &times;
+            </button>
+          </div>
+
+          <div className="panel-search">
+            <input
+              type="text"
+              placeholder="Search modules…"
+              value={panelSearch}
+              onChange={(e) => setPanelSearch(e.target.value)}
+              className="panel-search-input"
+            />
+            {panelSearch && (
+              <button
+                className="panel-search-clear"
+                onClick={() => setPanelSearch('')}
+              >
+                &times;
+              </button>
+            )}
+          </div>
+
+          <div className="panel-sections">
+            {filteredCategories.map((cat) => (
+              <div key={cat.id} className="panel-section">
+                <button
+                  className={`panel-section-header${collapsedSections[cat.id] ? ' collapsed' : ''}`}
+                  onClick={() => toggleSection(cat.id)}
+                >
+                  <span className="section-chevron">
+                    {collapsedSections[cat.id] ? '›' : '‹'}
+                  </span>
+                  <span className="section-label">{cat.label}</span>
+                  <span className="section-desc">{cat.desc}</span>
+                  <span className="section-count">{cat.types.length}</span>
+                </button>
+
+                {!collapsedSections[cat.id] && (
+                  <div className="panel-section-items">
+                    {cat.types.map((type) => {
+                      const schema = NODE_SCHEMA[type];
+                      return (
+                        <button
+                          key={type}
+                          className="panel-module-item"
+                          style={{ '--item-accent': schema.accent }}
+                          onClick={() => handlePanelAdd(type)}
+                        >
+                          <span
+                            className="module-item-dot"
+                          />
+                          <span className="module-item-info">
+                            <span className="module-item-label">{schema.label}</span>
+                            <span className="module-item-desc">{schema.desc}</span>
+                          </span>
+                          <span className="module-item-add">+</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {filteredCategories.length === 0 && (
+              <div className="panel-empty">No modules match "{panelSearch}"</div>
+            )}
+          </div>
         </div>
 
         {/* Status bar */}
