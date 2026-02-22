@@ -1,0 +1,246 @@
+# PRD Generator
+
+Create detailed Product Requirements Documents that are clear, actionable, and suitable for implementation.
+
+---
+
+## The Job
+
+1. Receive a feature description from the user
+2. Ask 3-5 essential clarifying questions (with lettered options)
+3. Generate a structured PRD based on answers
+4. Save to `tasks/prd-[feature-name].md`
+
+**Important:** Do NOT start implementing. Just create the PRD.
+
+---
+
+## Step 1: Clarifying Questions
+
+Ask only critical questions where the initial prompt is ambiguous. Focus on:
+
+- **Problem/Goal:** What problem does this solve?
+- **Core Functionality:** What are the key actions?
+- **Scope/Boundaries:** What should it NOT do?
+- **Success Criteria:** How do we know it's done?
+
+### Format Questions Like This:
+
+```
+1. What is the primary goal of this feature?
+   A. Improve user onboarding experience
+   B. Increase user retention
+   C. Reduce support burden
+   D. Other: [please specify]
+
+2. Who is the target user?
+   A. New users only
+   B. Existing users only
+   C. All users
+   D. Admin users only
+
+3. What is the scope?
+   A. Minimal viable version
+   B. Full-featured implementation
+   C. Just the backend/API
+   D. Just the UI
+```
+
+This lets users respond with "1A, 2C, 3B" for quick iteration.
+
+---
+
+## Step 2: PRD Structure
+
+Generate the PRD with these sections:
+
+### 1. Introduction/Overview
+Brief description of the feature and the problem it solves.
+
+### 2. Goals
+Specific, measurable objectives (bullet list).
+
+### 3. User Stories
+Each story needs:
+- **Title:** Short descriptive name
+- **Description:** "As a [user], I want [feature] so that [benefit]"
+- **Acceptance Criteria:** Verifiable checklist of what "done" means
+
+Each story should be small enough to implement in one focused session.
+
+**Format:**
+```markdown
+### US-001: [Title]
+**Description:** As a [user], I want [feature] so that [benefit].
+
+**Acceptance Criteria:**
+- [ ] Specific verifiable criterion
+- [ ] Another criterion
+- [ ] Quality checks pass (see below)
+```
+
+**Important:**
+- Acceptance criteria must be verifiable, not vague. "Works correctly" is bad. "Button shows confirmation dialog before deleting" is good.
+
+### Quality Checks for ORA-FM
+
+Include these quality checks in acceptance criteria:
+
+```
+- [ ] `npm run lint` passes
+- [ ] `npm run build` passes
+```
+
+### 4. Functional Requirements
+Numbered list of specific functionalities:
+- "FR-1: The system must allow users to..."
+- "FR-2: When a user clicks X, the system must..."
+
+Be explicit and unambiguous.
+
+### 5. Non-Goals (Out of Scope)
+What this feature will NOT include. Critical for managing scope.
+
+### 6. Design Considerations (Optional)
+- UI/UX requirements
+- Link to mockups if available
+- Relevant existing components to reuse
+
+### 7. Technical Considerations (Optional)
+- Known constraints or dependencies
+- Integration points with existing systems
+- Performance requirements
+
+### 8. Success Metrics
+How will success be measured?
+- "Reduce time to complete X by 50%"
+- "Increase conversion rate by 10%"
+
+### 9. Open Questions
+Remaining questions or areas needing clarification.
+
+---
+
+## Writing for Junior Developers
+
+The PRD reader may be a junior developer or AI agent. Therefore:
+
+- Be explicit and unambiguous
+- Avoid jargon or explain it
+- Provide enough detail to understand purpose and core logic
+- Number requirements for easy reference
+- Use concrete examples where helpful
+
+---
+
+## Output
+
+- **Format:** Markdown (`.md`)
+- **Location:** `tasks/` (at project root)
+- **Filename:** `prd-[feature-name].md` (kebab-case)
+
+Create the `tasks/` directory if it doesn't exist.
+
+---
+
+## Example PRD
+
+```markdown
+# PRD: Task Priority System
+
+## Introduction
+
+Add priority levels to tasks so users can focus on what matters most. Tasks can be marked as high, medium, or low priority, with visual indicators and filtering to help users manage their workload effectively.
+
+## Goals
+
+- Allow assigning priority (high/medium/low) to any task
+- Provide clear visual differentiation between priority levels
+- Enable filtering and sorting by priority
+- Default new tasks to medium priority
+
+## User Stories
+
+### US-001: Add priority state to module
+**Description:** As a developer, I need to store module priority so it persists across sessions.
+
+**Acceptance Criteria:**
+- [ ] Add priority field to module state: 'high' | 'medium' | 'low' (default 'medium')
+- [ ] State updates correctly when changed
+- [ ] `npm run lint` passes
+- [ ] `npm run build` passes
+
+### US-002: Display priority indicator on module cards
+**Description:** As a user, I want to see module priority at a glance so I know what needs attention first.
+
+**Acceptance Criteria:**
+- [ ] Each module card shows colored priority badge (red=high, yellow=medium, gray=low)
+- [ ] Badge includes icon: 🔴 high, 🟡 medium, ⚪ low
+- [ ] Priority visible without hovering or clicking
+- [ ] `npm run lint` passes
+- [ ] `npm run build` passes
+
+### US-003: Add priority selector to module edit
+**Description:** As a user, I want to change a module's priority when editing it.
+
+**Acceptance Criteria:**
+- [ ] Priority dropdown in module edit modal
+- [ ] Shows current priority as selected
+- [ ] Saves immediately on selection change
+- [ ] `npm run lint` passes
+- [ ] `npm run build` passes
+
+### US-004: Filter modules by priority
+**Description:** As a user, I want to filter the module list to see only high-priority items when I'm focused.
+
+**Acceptance Criteria:**
+- [ ] Filter dropdown with options: All | High | Medium | Low
+- [ ] Filter persists in URL params
+- [ ] Empty state message when no modules match filter
+- [ ] `npm run lint` passes
+- [ ] `npm run build` passes
+
+## Functional Requirements
+
+- FR-1: Add `priority` field to tasks table ('high' | 'medium' | 'low', default 'medium')
+- FR-2: Display colored priority badge on each task card
+- FR-3: Include priority selector in task edit modal
+- FR-4: Add priority filter dropdown to task list header
+- FR-5: Sort by priority within each status column (high → medium → low)
+
+## Non-Goals
+
+- No priority-based notifications or reminders
+- No automatic priority assignment based on due date
+- No priority inheritance for subtasks
+
+## Technical Considerations
+
+- Reuse existing badge component with color variants
+- Filter state managed via URL search params
+- Priority stored in database, not computed
+
+## Success Metrics
+
+- Users can change priority in <2 clicks
+- High-priority tasks immediately visible at top of lists
+- No regression in task list performance
+
+## Open Questions
+
+- Should priority affect task ordering within a column?
+- Should we add keyboard shortcuts for priority changes?
+```
+
+---
+
+## Checklist
+
+Before saving the PRD:
+
+- [ ] Asked clarifying questions with lettered options
+- [ ] Incorporated user's answers
+- [ ] User stories are small and specific
+- [ ] Functional requirements are numbered and unambiguous
+- [ ] Non-goals section defines clear boundaries
+- [ ] Saved to `tasks/prd-[feature-name].md`
