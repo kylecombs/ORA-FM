@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
+import { ScriptRunner } from './audio/scriptRunner';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { createTheme } from '@uiw/codemirror-themes';
@@ -428,6 +429,11 @@ export default function GridView() {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const didDragRef = useRef(false);
 
+  // Script runtime state
+  const scriptRunnerRef = useRef(null);
+  const [runningScripts, setRunningScripts] = useState(new Set());
+  const [scriptLogs, setScriptLogs] = useState({}); // nodeId → string[]
+
   // Instrument panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelSearch, setPanelSearch] = useState('');
@@ -437,7 +443,38 @@ export default function GridView() {
   useEffect(() => {
     engineRef.current = new GridEngine();
     engineRef.current.onStatus = (msg) => setStatus(msg);
-    return () => engineRef.current?.stopAll();
+
+    scriptRunnerRef.current = new ScriptRunner({
+      onOutput: (nodeId, value) => {
+        setNodes((prev) => {
+          const node = prev[nodeId];
+          if (!node) return prev;
+          return {
+            ...prev,
+            [nodeId]: {
+              ...node,
+              params: { ...node.params, value },
+            },
+          };
+        });
+      },
+      onLog: (nodeId, ...args) => {
+        const line = args.map((a) =>
+          typeof a === 'object' ? JSON.stringify(a) : String(a)
+        ).join(' ');
+        setScriptLogs((prev) => {
+          const existing = prev[nodeId] || [];
+          // Keep last 100 lines
+          const next = [...existing, line].slice(-100);
+          return { ...prev, [nodeId]: next };
+        });
+      },
+    });
+
+    return () => {
+      engineRef.current?.stopAll();
+      scriptRunnerRef.current?.stopAll();
+    };
   }, []);
 
   // ── Sync audio with live node set & bus routing ──────
@@ -729,6 +766,12 @@ export default function GridView() {
   const removeNode = useCallback(
     (id) => {
       engineRef.current?.stop(id);
+      scriptRunnerRef.current?.stop(id);
+      setRunningScripts((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setNodes((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -760,6 +803,27 @@ export default function GridView() {
       ...prev,
       [nodeId]: { ...prev[nodeId], code },
     }));
+  }, []);
+
+  // ── Script run/stop ───────────────────────────────────
+  const handleRunScript = useCallback((nodeId, code) => {
+    const runner = scriptRunnerRef.current;
+    if (!runner) return;
+    // Clear previous logs for this node
+    setScriptLogs((prev) => ({ ...prev, [nodeId]: [] }));
+    runner.run(nodeId, code);
+    setRunningScripts((prev) => new Set(prev).add(nodeId));
+  }, []);
+
+  const handleStopScript = useCallback((nodeId) => {
+    const runner = scriptRunnerRef.current;
+    if (!runner) return;
+    runner.stop(nodeId);
+    setRunningScripts((prev) => {
+      const next = new Set(prev);
+      next.delete(nodeId);
+      return next;
+    });
   }, []);
 
   // ── Param port click (modulation connect/disconnect) ──
@@ -1058,7 +1122,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${isScript ? ' script' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${isScript ? ' script' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -1171,7 +1235,7 @@ export default function GridView() {
         )}
 
         {/* Live indicator */}
-        {(isLive || hasModOutput) && <div className="node-live-dot" />}
+        {(isLive || hasModOutput || runningScripts.has(node.id)) && <div className="node-live-dot" />}
       </div>
     );
   };
@@ -1371,21 +1435,60 @@ export default function GridView() {
                         </div>
                       </div>
 
-                      <div className="script-outputs-section">
-                        <span className="script-outputs-label">Output Ports</span>
-                        <div className="script-outputs-list">
-                          {selSchema.outputs.map((name, i) => (
-                            <div key={i} className="script-output-port">
-                              <span
-                                className="script-output-dot"
-                                style={{ background: selSchema.accent }}
-                              />
-                              <span className="script-output-name">{name}</span>
-                              <span className="script-output-val">
-                                {selNode.params.value ?? 0}
-                              </span>
+                      {/* Run / Stop controls */}
+                      <div className="script-controls">
+                        {runningScripts.has(selNode.id) ? (
+                          <button
+                            className="script-btn script-btn-stop"
+                            onClick={() => handleStopScript(selNode.id)}
+                          >
+                            Stop
+                          </button>
+                        ) : (
+                          <button
+                            className="script-btn script-btn-run"
+                            onClick={() =>
+                              handleRunScript(selNode.id, selNode.code || '')
+                            }
+                          >
+                            Run
+                          </button>
+                        )}
+                        <div className="script-output-live">
+                          <span className="script-output-live-label">out</span>
+                          <span className={`script-output-live-val${runningScripts.has(selNode.id) ? ' active' : ''}`}>
+                            {(selNode.params.value ?? 0).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Console log */}
+                      <div className="script-console">
+                        <div className="script-console-header">
+                          <span className="script-console-label">Console</span>
+                          <button
+                            className="script-console-clear"
+                            onClick={() =>
+                              setScriptLogs((prev) => ({
+                                ...prev,
+                                [selNode.id]: [],
+                              }))
+                            }
+                          >
+                            clear
+                          </button>
+                        </div>
+                        <div className="script-console-output">
+                          {(scriptLogs[selNode.id] || []).map((line, i) => (
+                            <div key={i} className="script-console-line">
+                              {line}
                             </div>
                           ))}
+                          {(scriptLogs[selNode.id] || []).length === 0 && (
+                            <div className="script-console-empty">
+                              output will appear here
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
