@@ -812,3 +812,263 @@
   letter-spacing: 0.04em;
   opacity: 0.6;
 }
+
+/* ═══════════════════════════════════════════════
+   Script Node Styling
+   ═══════════════════════════════════════════════ */
+
+.sense-node.script {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border, #252320));
+}
+
+.sense-node.script::before {
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.sense-node.selected {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 20px -4px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ── Script code preview (inside node) ─────── */
+.script-code-preview {
+  padding: 4px 10px 6px;
+  border-top: 1px solid rgba(37, 35, 32, 0.5);
+  cursor: pointer;
+  transition: background 0.15s;
+  min-height: 28px;
+}
+
+.script-code-preview:hover {
+  background: rgba(200, 176, 96, 0.06);
+}
+
+.script-code-preview code {
+  display: block;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.42rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 36px;
+}
+
+/* ═══════════════════════════════════════════════
+   Module Details Panel
+   ═══════════════════════════════════════════════ */
+
+.module-details-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 360px;
+  height: 100vh;
+  background: var(--surface, #111010);
+  border-right: 1px solid var(--border, #252320);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+}
+
+.module-details-panel.open {
+  transform: translateX(0);
+}
+
+/* ── Details header ──────────────────────────── */
+.details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border, #252320);
+}
+
+.details-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.details-accent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.details-title {
+  font-family: 'DM Serif Display', serif;
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--ink, #d4cfc8);
+  letter-spacing: -0.01em;
+}
+
+.details-desc {
+  font-size: 0.55rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.04em;
+}
+
+.details-close {
+  background: none;
+  border: none;
+  color: var(--dim, #7a7570);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.details-close:hover {
+  opacity: 1;
+  color: var(--ink, #d4cfc8);
+}
+
+/* ── Details body ────────────────────────────── */
+.details-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.details-placeholder {
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.6rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.04em;
+  line-height: 1.8;
+  opacity: 0.6;
+}
+
+/* ── Script editor section ───────────────────── */
+.script-editor-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.script-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem 0.5rem;
+}
+
+.script-editor-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--ink, #d4cfc8);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.script-editor-hint {
+  font-size: 0.48rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.04em;
+}
+
+.script-editor-wrap {
+  flex: 1;
+  padding: 0 0.75rem 0.75rem;
+  min-height: 0;
+}
+
+.script-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  background: var(--deep, #0c0b0a);
+  border: 1px solid var(--border, #252320);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.62rem;
+  line-height: 1.7;
+  color: var(--ink, #d4cfc8);
+  letter-spacing: 0.02em;
+  resize: none;
+  outline: none;
+  tab-size: 2;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.script-editor::placeholder {
+  color: var(--dim, #7a7570);
+  opacity: 0.5;
+}
+
+.script-editor:focus {
+  border-color: rgba(200, 176, 96, 0.4);
+  box-shadow: 0 0 0 1px rgba(200, 176, 96, 0.1);
+}
+
+/* ── Script outputs section ──────────────────── */
+.script-outputs-section {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border, #252320);
+}
+
+.script-outputs-label {
+  display: block;
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.script-outputs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.script-output-port {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.35rem 0.5rem;
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  border-radius: 6px;
+}
+
+.script-output-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.script-output-name {
+  font-size: 0.55rem;
+  color: var(--ink, #d4cfc8);
+  letter-spacing: 0.06em;
+  flex: 1;
+}
+
+.script-output-val {
+  font-size: 0.5rem;
+  color: var(--dim, #7a7570);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
