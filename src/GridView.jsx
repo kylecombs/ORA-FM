@@ -61,6 +61,19 @@ const NODE_SCHEMA = {
       release: { label: 'rel',  min: 0,  max: 10,   step: 0.1,  val: 1 },
     },
   },
+  sine_osc: {
+    label: 'Sine Osc',
+    desc: 'modulatable sine',
+    accent: '#b89a6a',
+    synthDef: 'sine',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      freq:  { label: 'freq',  min: 20,  max: 20000, step: 0.1,  val: 440 },
+      amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
+    },
+  },
   saw: {
     label: 'Saw',
     desc: 'sawtooth',
@@ -314,7 +327,7 @@ const MODULE_CATEGORIES = [
     id: 'oscillators',
     label: 'Oscillators',
     desc: 'basic waveforms',
-    types: ['sine', 'saw'],
+    types: ['sine', 'sine_osc', 'saw'],
   },
   {
     id: 'instruments',
