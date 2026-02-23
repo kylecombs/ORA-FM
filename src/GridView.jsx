@@ -45,10 +45,20 @@ const oraTheme = createTheme({
 });
 
 // ── Frequency quantisation (12-TET, A4 = 440 Hz) ─────────
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
 function quantizeFreq(hz) {
   if (hz <= 0) return hz;
   const semitone = 12 * Math.log2(hz / 440);
   return 440 * Math.pow(2, Math.round(semitone) / 12);
+}
+
+function freqToNoteName(hz) {
+  if (hz <= 0) return '—';
+  const midi = Math.round(69 + 12 * Math.log2(hz / 440));
+  const name = NOTE_NAMES[((midi % 12) + 12) % 12];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${name}${octave}`;
 }
 
 // ── Node type definitions ─────────────────────────────────
@@ -1501,11 +1511,13 @@ export default function GridView() {
                     }}
                   />
                   <span className="param-val">
-                    {displayVal >= 100
-                      ? Math.round(displayVal)
-                      : displayVal.toFixed(
-                          def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                        )}
+                    {key === 'freq' && node.quantize
+                      ? freqToNoteName(displayVal)
+                      : displayVal >= 100
+                        ? Math.round(displayVal)
+                        : displayVal.toFixed(
+                            def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                          )}
                   </span>
                 </div>
               );
@@ -1809,6 +1821,8 @@ export default function GridView() {
                         </label>
                         {selNode.quantize && (
                           <div className="sine-osc-quantize-info">
+                            {freqToNoteName(selNode.params.freq ?? 440)}
+                            {' · '}
                             {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
                           </div>
                         )}
