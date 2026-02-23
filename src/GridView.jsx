@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
 import { ScriptRunner } from './audio/scriptRunner';
+import { EnvelopeRunner } from './audio/envelopeRunner';
+import BreakpointEditor from './BreakpointEditor';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { createTheme } from '@uiw/codemirror-themes';
@@ -281,6 +283,19 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 127, step: 0.01, val: 60 },
     },
   },
+  envelope: {
+    label: 'Envelope',
+    desc: 'breakpoint editor',
+    accent: '#c8b060',
+    synthDef: null,
+    category: 'control',
+    width: 280,
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'out', min: 0, max: 1, step: 0.001, val: 0, hidden: true },
+    },
+  },
   audioOut: {
     label: 'Output',
     desc: 'audio destination',
@@ -334,7 +349,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant'],
+    types: ['constant', 'envelope'],
   },
 ];
 
@@ -344,10 +359,14 @@ const HEADER_H = 32;
 const PORT_SECTION_Y = HEADER_H + 2;
 const PORT_SPACING = 22;
 
+function getNodeWidth(node) {
+  return NODE_SCHEMA[node.type]?.width || NODE_W;
+}
+
 function getPortPos(node, portType, portIndex) {
   const y = node.y + PORT_SECTION_Y + 11 + portIndex * PORT_SPACING;
   if (portType === 'output') {
-    return { x: node.x + NODE_W, y };
+    return { x: node.x + getNodeWidth(node), y };
   }
   return { x: node.x, y };
 }
@@ -434,6 +453,10 @@ export default function GridView() {
   const [runningScripts, setRunningScripts] = useState(new Set());
   const [scriptLogs, setScriptLogs] = useState({}); // nodeId → string[]
 
+  // Envelope runtime state
+  const envelopeRunnerRef = useRef(null);
+  const [runningEnvelopes, setRunningEnvelopes] = useState(new Set());
+
   // Instrument panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelSearch, setPanelSearch] = useState('');
@@ -471,9 +494,24 @@ export default function GridView() {
       },
     });
 
+    envelopeRunnerRef.current = new EnvelopeRunner((nodeId, value) => {
+      setNodes((prev) => {
+        const node = prev[nodeId];
+        if (!node) return prev;
+        return {
+          ...prev,
+          [nodeId]: {
+            ...node,
+            params: { ...node.params, value },
+          },
+        };
+      });
+    });
+
     return () => {
       engineRef.current?.stopAll();
       scriptRunnerRef.current?.stopAll();
+      envelopeRunnerRef.current?.stopAll();
     };
   }, []);
 
@@ -752,6 +790,17 @@ export default function GridView() {
     if (schema.category === 'script') {
       node.code = '// Write your script here\n// Output values with: out(value)\n';
     }
+    if (type === 'envelope') {
+      node.breakpoints = [
+        { time: 0, value: 0 },
+        { time: 0.15, value: 1 },
+        { time: 0.4, value: 0.6 },
+        { time: 1, value: 0 },
+      ];
+      node.curves = [0, 0, -2];
+      node.duration = 2;
+      node.loop = false;
+    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -767,7 +816,13 @@ export default function GridView() {
     (id) => {
       engineRef.current?.stop(id);
       scriptRunnerRef.current?.stop(id);
+      envelopeRunnerRef.current?.stop(id);
       setRunningScripts((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setRunningEnvelopes((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
@@ -826,6 +881,72 @@ export default function GridView() {
     });
   }, []);
 
+  // ── Envelope handlers ──────────────────────────────────
+  const handleBreakpointsChange = useCallback((nodeId, breakpoints, curves) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], breakpoints, curves },
+    }));
+  }, []);
+
+  const handleEnvelopeDuration = useCallback((nodeId, duration) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], duration },
+    }));
+  }, []);
+
+  const handleEnvelopeLoop = useCallback((nodeId, loop) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], loop },
+    }));
+  }, []);
+
+  const handleEnvelopeTrigger = useCallback((nodeId) => {
+    const runner = envelopeRunnerRef.current;
+    if (!runner) return;
+
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      if (!node) return prev;
+      runner.trigger(
+        nodeId,
+        node.breakpoints,
+        node.curves,
+        node.duration,
+        node.loop
+      );
+      return prev;
+    });
+    setRunningEnvelopes((prev) => new Set(prev).add(nodeId));
+
+    // Poll for completion to clear the running state
+    const checkDone = setInterval(() => {
+      if (!envelopeRunnerRef.current?.isRunning(nodeId)) {
+        clearInterval(checkDone);
+        setRunningEnvelopes((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeId);
+          return next;
+        });
+      }
+    }, 100);
+  }, []);
+
+  const handleEnvelopeStop = useCallback((nodeId) => {
+    envelopeRunnerRef.current?.stop(nodeId);
+    setRunningEnvelopes((prev) => {
+      const next = new Set(prev);
+      next.delete(nodeId);
+      return next;
+    });
+  }, []);
+
+  const getEnvelopeProgress = useCallback((nodeId) => {
+    return envelopeRunnerRef.current?.getProgress(nodeId) || null;
+  }, []);
+
   // ── Param port click (modulation connect/disconnect) ──
   const handleParamPortClick = useCallback(
     (e, nodeId, paramKey) => {
@@ -870,7 +991,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1101,6 +1222,8 @@ export default function GridView() {
     const isFx = schema.category === 'fx';
     const isControl = schema.category === 'control';
     const isScript = schema.category === 'script';
+    const isEnvelope = node.type === 'envelope';
+    const nodeWidth = schema.width || NODE_W;
 
     // Check if this control/script module has any modulation connections
     const hasModOutput = (isControl || isScript) && connections.some(
@@ -1122,10 +1245,11 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${isScript ? ' script' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
+          width: nodeWidth,
           '--accent': schema.accent,
         }}
         onMouseDown={(e) => startDrag(e, node.id)}
@@ -1188,10 +1312,67 @@ export default function GridView() {
           )}
         </div>
 
-        {/* Parameters */}
-        {Object.keys(schema.params).length > 0 && (
+        {/* Envelope editor */}
+        {isEnvelope && (
+          <div className="envelope-body">
+            <BreakpointEditor
+              breakpoints={node.breakpoints || []}
+              curves={node.curves || []}
+              onChange={(bps, crvs) => handleBreakpointsChange(node.id, bps, crvs)}
+              accentColor={schema.accent}
+              getPlaybackProgress={getEnvelopeProgress}
+              nodeId={node.id}
+            />
+            <div className="envelope-controls">
+              {runningEnvelopes.has(node.id) ? (
+                <button
+                  className="env-btn env-btn-stop"
+                  onClick={() => handleEnvelopeStop(node.id)}
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  className="env-btn env-btn-trig"
+                  onClick={() => handleEnvelopeTrigger(node.id)}
+                >
+                  Trig
+                </button>
+              )}
+              <label className="env-dur">
+                <span className="env-dur-label">dur</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  max="60"
+                  step="0.1"
+                  value={node.duration ?? 2}
+                  onChange={(e) =>
+                    handleEnvelopeDuration(node.id, parseFloat(e.target.value) || 2)
+                  }
+                />
+                <span className="env-dur-unit">s</span>
+              </label>
+              <label className="env-loop">
+                <input
+                  type="checkbox"
+                  checked={node.loop || false}
+                  onChange={(e) => handleEnvelopeLoop(node.id, e.target.checked)}
+                />
+                <span className="env-loop-label">loop</span>
+              </label>
+              <span className="env-out-val">
+                {(node.params.value ?? 0).toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Parameters (skip hidden params, skip for envelope) */}
+        {!isEnvelope && Object.keys(schema.params).length > 0 && (
           <div className="node-params">
             {Object.entries(schema.params).map(([key, def]) => {
+              if (def.hidden) return null;
               const isModulated = key in modulatedParams;
               const displayVal = isModulated ? modulatedParams[key] : (node.params[key] ?? def.val);
 
@@ -1235,7 +1416,7 @@ export default function GridView() {
         )}
 
         {/* Live indicator */}
-        {(isLive || hasModOutput || runningScripts.has(node.id)) && <div className="node-live-dot" />}
+        {(isLive || hasModOutput || runningScripts.has(node.id) || runningEnvelopes.has(node.id)) && <div className="node-live-dot" />}
       </div>
     );
   };
@@ -1401,7 +1582,17 @@ export default function GridView() {
                     </button>
                   </div>
 
-                  {selSchema.category === 'script' ? (
+                  {selNode.type === 'envelope' ? (
+                    <div className="details-body">
+                      <div className="details-placeholder">
+                        Edit the envelope directly on the canvas.
+                        <br /><br />
+                        Click to add breakpoints, drag to move them.
+                        Double-click a point to remove it.
+                        Drag a curve segment up/down to adjust curvature.
+                      </div>
+                    </div>
+                  ) : selSchema.category === 'script' ? (
                     <div className="details-body">
                       <div className="script-editor-section">
                         <div className="script-editor-header">
