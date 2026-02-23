@@ -294,6 +294,7 @@ const NODE_SCHEMA = {
     outputs: ['out'],
     params: {
       value: { label: 'out', min: 0, max: 1, step: 0.001, val: 0, hidden: true },
+      trig:  { label: 'trig', min: 0, max: 1, step: 1, val: 0, hidden: true },
     },
   },
   audioOut: {
@@ -377,6 +378,10 @@ const PARAM_START_Y = HEADER_H + 1 + 6; // header + border + top padding
 const PARAM_ROW_H = 18;
 
 function getParamPortPos(node, schema, paramKey) {
+  // Envelope trigger port: vertically centered on the canvas area
+  if (node.type === 'envelope' && paramKey === 'trig') {
+    return { x: node.x, y: node.y + HEADER_H + 60 };
+  }
   const paramKeys = Object.keys(schema.params);
   const idx = paramKeys.indexOf(paramKey);
   if (idx === -1) return { x: node.x, y: node.y };
@@ -947,6 +952,59 @@ export default function GridView() {
     return envelopeRunnerRef.current?.getProgress(nodeId) || null;
   }, []);
 
+  // ── External trigger detection (rising-edge on modulated trig param) ──
+  const prevTrigVals = useRef({}); // nodeId → previous trigger source value
+
+  useEffect(() => {
+    const prev = prevTrigVals.current;
+
+    for (const conn of connections) {
+      if (conn.toParam !== 'trig') continue;
+
+      const targetNode = nodes[conn.toNodeId];
+      if (!targetNode || targetNode.type !== 'envelope') continue;
+
+      const sourceNode = nodes[conn.fromNodeId];
+      if (!sourceNode) continue;
+
+      const srcSchema = NODE_SCHEMA[sourceNode.type];
+      if (srcSchema?.category !== 'control' && srcSchema?.category !== 'script') continue;
+
+      const value = sourceNode.params.value ?? 0;
+      const prevValue = prev[conn.toNodeId] ?? 0;
+
+      // Rising edge: crossed above 0.5
+      if (value >= 0.5 && prevValue < 0.5) {
+        const runner = envelopeRunnerRef.current;
+        if (runner) {
+          const envId = conn.toNodeId;
+          runner.trigger(
+            envId,
+            targetNode.breakpoints,
+            targetNode.curves,
+            targetNode.duration,
+            targetNode.loop
+          );
+          setRunningEnvelopes((s) => new Set(s).add(envId));
+
+          // Poll for completion to clear running state
+          const check = setInterval(() => {
+            if (!envelopeRunnerRef.current?.isRunning(envId)) {
+              clearInterval(check);
+              setRunningEnvelopes((s) => {
+                const next = new Set(s);
+                next.delete(envId);
+                return next;
+              });
+            }
+          }, 100);
+        }
+      }
+
+      prev[conn.toNodeId] = value;
+    }
+  }, [nodes, connections]);
+
   // ── Param port click (modulation connect/disconnect) ──
   const handleParamPortClick = useCallback(
     (e, nodeId, paramKey) => {
@@ -1279,6 +1337,18 @@ export default function GridView() {
             <span className="port-label port-label-out">{name}</span>
           </div>
         ))}
+
+        {/* Envelope trigger input port (always visible on left edge, centered on canvas) */}
+        {isEnvelope && (
+          <div
+            className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
+            style={{ top: HEADER_H + 60 - 4 }}
+            onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
+            title="trigger input"
+          >
+            <span className="port-label port-label-in">trig</span>
+          </div>
+        )}
 
         {/* Parameter modulation input ports (left edge, aligned with each param row) */}
         {!isControl && !isScript && !isAudioOut && Object.keys(schema.params).map((key, i) => {
