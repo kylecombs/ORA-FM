@@ -85,8 +85,10 @@ const NODE_SCHEMA = {
     synthDef: 'sine',
     inputs: [],
     outputs: ['out'],
+    // Audio-rate modulation inputs (routed via audio buses)
+    modInputs: ['freq', 'amp', 'phase'],
     params: {
-      freq:  { label: 'freq',  min: 20,  max: 20000, step: 0.1,  val: 440 },
+      freq:  { label: 'freq',  min: 0.1, max: 20000, step: 0.1,  val: 440 },
       amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
       phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
     },
@@ -287,6 +289,29 @@ const NODE_SCHEMA = {
       mix:      { label: 'mix',   min: 0,    max: 1,  step: 0.01, val: 1 },
     },
   },
+  // ── Utility modules ─────────────────────────────────────
+  multiply: {
+    label: 'Multiply',
+    desc: 'signal gain',
+    accent: '#a0a0a0',
+    synthDef: 'multiply',
+    category: 'fx',  // Uses FX routing (in_bus → out_bus)
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      gain: { label: 'gain', min: 0, max: 5000, step: 1, val: 100 },
+    },
+  },
+  print: {
+    label: 'Print',
+    desc: 'debug logger',
+    accent: '#e07050',
+    synthDef: 'print',
+    category: 'fx',  // Uses FX routing (reads from in_bus)
+    inputs: ['in'],
+    outputs: [],
+    params: {},
+  },
   // ── Script modules ───────────────────────────────────────
   script: {
     label: 'Script',
@@ -369,6 +394,12 @@ const MODULE_CATEGORIES = [
     label: 'Effects',
     desc: 'time & space',
     types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger'],
+  },
+  {
+    id: 'utility',
+    label: 'Utility',
+    desc: 'signal tools',
+    types: ['multiply', 'print'],
   },
   {
     id: 'scripting',
@@ -497,10 +528,46 @@ export default function GridView() {
   const [panelSearch, setPanelSearch] = useState('');
   const [collapsedSections, setCollapsedSections] = useState({});
 
+  // Print console state
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [printLogs, setPrintLogs] = useState([]); // { nodeId, prefix, color, value, time }[]
+  const nodesRef = useRef(nodes); // Ref to access current nodes in callbacks
+  nodesRef.current = nodes;
+  const printConsoleRef = useRef(null);
+
+  // Auto-scroll print console when new logs arrive
+  useEffect(() => {
+    if (printConsoleRef.current && consoleOpen) {
+      printConsoleRef.current.scrollTop = printConsoleRef.current.scrollHeight;
+    }
+  }, [printLogs, consoleOpen]);
+
   // ── Engine setup ──────────────────────────────────────
   useEffect(() => {
     engineRef.current = new GridEngine();
     engineRef.current.onStatus = (msg) => setStatus(msg);
+
+    // Handle print module messages
+    engineRef.current.onPrint = (nodeId, value) => {
+      const node = nodesRef.current[nodeId];
+      if (!node || node.type !== 'print') return;
+
+      const prefix = node.printPrefix ?? 'print';
+      const color = node.printColor || '#e07050';
+
+      setPrintLogs((prev) => {
+        const entry = {
+          id: Date.now() + Math.random(),
+          nodeId,
+          prefix,
+          color,
+          value: typeof value === 'number' ? value.toFixed(4) : String(value),
+          time: new Date().toLocaleTimeString(),
+        };
+        // Keep last 200 entries
+        return [...prev, entry].slice(-200);
+      });
+    };
 
     scriptRunnerRef.current = new ScriptRunner({
       onOutput: (nodeId, value) => {
@@ -552,7 +619,7 @@ export default function GridView() {
 
   // ── Sync audio with live node set & bus routing ──────
   const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
-  const prevModRef = useRef({});     // `${nodeId}:${param}` → { busIndex }
+  const prevModRef = useRef({});     // `${nodeId}:${param}` → { busIndex, isAudioRate }
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -562,38 +629,107 @@ export default function GridView() {
     const outNode = Object.values(nodes).find((n) => n.type === 'audioOut');
     if (!outNode) return;
 
+    // ── 0. Identify audio-rate modulators ──
+    // Nodes that provide audio-rate modulation should be "live" even if
+    // not directly connected to AudioOut. We need them to play.
+    const audioRateModConns = connections.filter((c) => c.isAudioRate && c.toParam);
+    const modulatorIds = new Set(audioRateModConns.map((c) => c.fromNodeId));
+    const carrierIds = new Set(audioRateModConns.map((c) => c.toNodeId));
+
+    // Add modulators to live set if their carriers are live
+    for (const conn of audioRateModConns) {
+      if (live.has(conn.toNodeId) || carrierIds.has(conn.toNodeId)) {
+        live.add(conn.fromNodeId);
+      }
+    }
+
+    // ── 0b. Identify sink nodes (print modules) and their input chains ──
+    // Print modules can monitor ANY signal, not just live ones.
+    // Trace backwards from each print module to find all nodes in its input chain
+    // and add them to the live set so they play.
+    const printModules = Object.entries(nodes).filter(([, n]) => n.type === 'print');
+    for (const [printId, ] of printModules) {
+      const printNodeId = parseInt(printId);
+
+      // Check if this print module has any input connections
+      const hasInput = connections.some(
+        (c) => c.toNodeId === printNodeId && !c.toParam
+      );
+      if (!hasInput) continue; // Skip print modules with no input
+
+      // Trace back through all input connections to find the full chain
+      const toVisit = [printNodeId];
+      const visited = new Set();
+
+      while (toVisit.length > 0) {
+        const currentId = toVisit.pop();
+        if (visited.has(currentId)) continue;
+        visited.add(currentId);
+
+        // Add this node to live (so it plays)
+        live.add(currentId);
+
+        // Find all nodes that feed into this one (regular connections, not param mods)
+        const inputConns = connections.filter(
+          (c) => c.toNodeId === currentId && !c.toParam
+        );
+        for (const conn of inputConns) {
+          if (!visited.has(conn.fromNodeId)) {
+            toVisit.push(conn.fromNodeId);
+          }
+        }
+      }
+    }
+
     // ── 1. Assign audio buses to each connection ──
     // Connections to AudioOut use bus 0 (hardware out).
     // All other connections get a private bus (16+).
-    // Skip modulation connections (toParam) — they don't route audio.
+    // Skip control-rate modulation connections (toParam && !isAudioRate).
+    // Audio-rate modulation connections DO get audio buses.
     const connBus = {};
     let nextBus = 16;
     for (const conn of connections) {
-      if (conn.toParam) continue;
+      // Skip control-rate modulation (handled separately)
+      if (conn.toParam && !conn.isAudioRate) continue;
+
       const fromLive = live.has(conn.fromNodeId);
       const toLive = live.has(conn.toNodeId) || conn.toNodeId === outNode.id;
       if (!fromLive || !toLive) continue;
 
-      if (conn.toNodeId === outNode.id) {
+      if (conn.toNodeId === outNode.id && !conn.toParam) {
         connBus[conn.id] = 0;
       } else {
         connBus[conn.id] = nextBus;
-        nextBus += 2; // stereo pair
+        nextBus += 2; // stereo pair (though modulation only uses mono)
       }
     }
 
     // ── 2. Compute per-node routing ──
-    const nodeRouting = {}; // nodeId → { outBus, inBus, isFx }
+    const nodeRouting = {}; // nodeId → { outBus, inBus, isFx, isModulator, modOutBuses }
     for (const id of live) {
       const node = nodes[id];
       const schema = NODE_SCHEMA[node.type];
       const isFx = schema.category === 'fx';
+      const isModulator = modulatorIds.has(id);
 
-      // Outgoing audio connection from this node's output
-      const outConn = connections.find(
-        (c) => c.fromNodeId === id && !c.toParam && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
+      // Outgoing audio connection from this node's output (to AudioOut or FX)
+      // Prioritize connection to AudioOut (bus 0) over connections to other nodes
+      const outConnToAudioOut = connections.find(
+        (c) => c.fromNodeId === id && !c.toParam && c.toNodeId === outNode.id
       );
+      const outConnToLive = connections.find(
+        (c) => c.fromNodeId === id && !c.toParam && live.has(c.toNodeId)
+      );
+      const outConn = outConnToAudioOut || outConnToLive;
       const outBus = outConn ? (connBus[outConn.id] ?? 0) : 0;
+
+      // Audio-rate modulation output buses (when this node modulates others)
+      const modOutBuses = [];
+      for (const conn of audioRateModConns) {
+        if (conn.fromNodeId === id && connBus[conn.id] != null) {
+          modOutBuses.push({ connId: conn.id, bus: connBus[conn.id], toNodeId: conn.toNodeId, toParam: conn.toParam });
+        }
+      }
 
       // Incoming audio connection to this node's input (only for FX)
       let inBus;
@@ -604,11 +740,35 @@ export default function GridView() {
         inBus = inConn ? (connBus[inConn.id] ?? 0) : 0;
       }
 
-      nodeRouting[id] = { outBus, inBus, isFx };
+      // Compute effective output bus (accounts for modulation routing)
+      // If this node is a modulator, it outputs to the mod bus, not the regular bus
+      let effectiveOutBus = outBus;
+      if (isModulator && modOutBuses.length > 0) {
+        effectiveOutBus = modOutBuses[0].bus;
+      }
+
+      nodeRouting[id] = { outBus, effectiveOutBus, inBus, isFx, isModulator, modOutBuses };
+    }
+
+    // ── 2b. Fix sink nodes (print modules) to read from source's effective out bus ──
+    // Sink nodes have no outputs, so they should tap into the source's output bus
+    // rather than expecting a dedicated connection bus.
+    for (const id of live) {
+      const node = nodes[id];
+      if (node.type === 'print') {
+        const inConn = connections.find(
+          (c) => c.toNodeId === id && !c.toParam && live.has(c.fromNodeId)
+        );
+        if (inConn && nodeRouting[inConn.fromNodeId]) {
+          // Read from the same bus the source actually writes to
+          nodeRouting[id].inBus = nodeRouting[inConn.fromNodeId].effectiveOutBus;
+        }
+      }
     }
 
     // ── 3. Compute pan for source nodes ──
     // Trace each source's chain to AudioOut to find which port it reaches.
+    // Modulators that don't go to AudioOut get pan=0 (centered, though inaudible).
     for (const id of live) {
       const routing = nodeRouting[id];
       if (routing.isFx) continue;
@@ -635,15 +795,23 @@ export default function GridView() {
     }
 
     // ── 4. Build topological play order (sources first, then FX in chain order) ──
-    const sources = [];
+    // For audio-rate modulation (FM/AM), modulators must execute before carriers.
+    // Since engine.play() uses addToHead, we need to play carriers first, then modulators
+    // so that modulators end up at the head and execute first.
+    const sourceCarriers = [];
+    const sourceModulators = [];
     const fxSet = new Set();
     for (const id of live) {
       if (nodeRouting[id].isFx) {
         fxSet.add(id);
+      } else if (nodeRouting[id].isModulator) {
+        sourceModulators.push(id);
       } else {
-        sources.push(id);
+        sourceCarriers.push(id);
       }
     }
+    // Play carriers first (they end up toward tail), then modulators (they end up at head)
+    const sources = [...sourceCarriers, ...sourceModulators];
 
     // Topological sort of FX: repeatedly pick FX whose upstream is already placed
     const fxOrder = [];
@@ -666,6 +834,10 @@ export default function GridView() {
     for (const id of Object.keys(nodes)) {
       const nid = parseInt(id);
       if (!live.has(nid) && engine.isPlaying(nid)) {
+        // Clean up print module polling
+        if (nodes[id].type === 'print') {
+          engine.stopPrintModule(nid);
+        }
         engine.stop(nid);
       }
     }
@@ -692,14 +864,14 @@ export default function GridView() {
       const pan = routing.pan ?? 0;
 
       if (!engine.isPlaying(id)) {
-        const playParams = { ...node.params, pan, out_bus: routing.outBus };
+        const playParams = { ...node.params, pan, out_bus: routing.effectiveOutBus };
         if (node.quantize && playParams.freq != null) {
           playParams.freq = quantizeFreq(playParams.freq);
         }
         engine.play(id, schema.synthDef, playParams);
       } else {
         engine.setParam(id, 'pan', pan);
-        engine.setParam(id, 'out_bus', routing.outBus);
+        engine.setParam(id, 'out_bus', routing.effectiveOutBus);
       }
     }
 
@@ -712,11 +884,20 @@ export default function GridView() {
       const routing = nodeRouting[id];
 
       if (!engine.isPlaying(id)) {
-        engine.playFx(id, schema.synthDef, {
-          ...node.params,
-          in_bus: routing.inBus,
-          out_bus: routing.outBus,
-        });
+        // Special handling for print modules - allocate control bus
+        if (node.type === 'print') {
+          const printBus = engine.startPrintModule(id);
+          engine.playFx(id, schema.synthDef, {
+            in_bus: routing.inBus,
+            out_c_bus: printBus,
+          });
+        } else {
+          engine.playFx(id, schema.synthDef, {
+            ...node.params,
+            in_bus: routing.inBus,
+            out_bus: routing.outBus,
+          });
+        }
       } else {
         // Update FX params (bus routing unchanged, just tweak params)
         for (const [k, v] of Object.entries(node.params)) {
@@ -730,10 +911,9 @@ export default function GridView() {
       engine.reorderFx(fxOrder);
     }
 
-    // ── 10. Apply modulation via control buses ──
-    // Each modulation connection gets a dedicated scsynth control bus.
-    // The source value is written with /c_set, and the target param is
-    // mapped to read from that bus with /n_map — all at the engine level.
+    // ── 10. Apply modulation ──
+    // Control-rate modulation: control modules write to control buses, targets read via /n_map
+    // Audio-rate modulation: audio modules write to audio buses, targets read via /n_mapa
     const prevMod = prevModRef.current;
     const currentMod = {};
 
@@ -744,23 +924,44 @@ export default function GridView() {
       if (!sourceNode || !targetNode) continue;
 
       const sourceSchema = NODE_SCHEMA[sourceNode.type];
-      if (sourceSchema?.category !== 'control' && sourceSchema?.category !== 'script') continue;
-
       const modKey = `${conn.toNodeId}:${conn.toParam}`;
-      const value = sourceNode.params.value ?? 0;
 
-      // Allocate a control bus (stable — same key returns same bus)
-      const busIndex = engine.allocControlBus(modKey);
+      if (conn.isAudioRate) {
+        // ── Audio-rate modulation ──
+        // The source's audio output goes to an audio bus, and the target's
+        // {param}_mod input reads from that bus via /n_mapa.
+        const audioBus = connBus[conn.id];
+        if (audioBus == null) continue;
 
-      // Write the current value to the control bus
-      engine.setControlBus(busIndex, value);
+        // The actual param name for audio-rate mod is {param}_mod
+        const modParam = `${conn.toParam}_mod`;
 
-      // Map the target synth's param to read from this bus
-      if (engine.isPlaying(conn.toNodeId)) {
-        engine.mapParam(conn.toNodeId, conn.toParam, busIndex);
+        // Map the target synth's mod param to read from the audio bus
+        if (engine.isPlaying(conn.toNodeId)) {
+          engine.mapParamToAudioBus(conn.toNodeId, modParam, audioBus);
+        }
+
+        currentMod[modKey] = { busIndex: audioBus, isAudioRate: true, modParam };
+      } else {
+        // ── Control-rate modulation ──
+        // Only control/script modules can do control-rate modulation
+        if (sourceSchema?.category !== 'control' && sourceSchema?.category !== 'script') continue;
+
+        const value = sourceNode.params.value ?? 0;
+
+        // Allocate a control bus (stable — same key returns same bus)
+        const busIndex = engine.allocControlBus(modKey);
+
+        // Write the current value to the control bus
+        engine.setControlBus(busIndex, value);
+
+        // Map the target synth's param to read from this bus
+        if (engine.isPlaying(conn.toNodeId)) {
+          engine.mapParam(conn.toNodeId, conn.toParam, busIndex);
+        }
+
+        currentMod[modKey] = { busIndex, isAudioRate: false };
       }
-
-      currentMod[modKey] = { busIndex };
     }
 
     // Unmap params that are no longer modulated
@@ -772,8 +973,14 @@ export default function GridView() {
         const targetNode = nodes[nodeId];
         const baseValue = targetNode?.params[param] ?? 0;
 
-        engine.unmapParam(nodeId, param, baseValue);
-        engine.freeControlBus(modKey);
+        if (info.isAudioRate) {
+          // Unmap audio-rate modulation
+          engine.unmapParamFromAudioBus(nodeId, info.modParam, 0);
+        } else {
+          // Unmap control-rate modulation
+          engine.unmapParam(nodeId, param, baseValue);
+          engine.freeControlBus(modKey);
+        }
       }
     }
 
@@ -835,6 +1042,10 @@ export default function GridView() {
       node.curves = [0, 0, -2];
       node.duration = 2;
       node.loop = false;
+    }
+    if (type === 'print') {
+      node.printPrefix = 'print';
+      node.printColor = '#e07050';
     }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
@@ -933,6 +1144,25 @@ export default function GridView() {
       }
       return { ...prev, [nodeId]: updated };
     });
+  }, []);
+
+  // ── Print module handlers ─────────────────────────────
+  const handlePrintPrefix = useCallback((nodeId, prefix) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], printPrefix: prefix },
+    }));
+  }, []);
+
+  const handlePrintColor = useCallback((nodeId, color) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], printColor: color },
+    }));
+  }, []);
+
+  const clearPrintLogs = useCallback(() => {
+    setPrintLogs([]);
   }, []);
 
   // ── Envelope handlers ──────────────────────────────────
@@ -1066,6 +1296,18 @@ export default function GridView() {
           return;
         }
 
+        // Determine if this is an audio-rate modulation connection
+        // Audio-rate: source has audio outputs (not control/script) AND target has modInputs
+        const sourceNode = nodes[connecting.fromNodeId];
+        const targetNode = nodes[nodeId];
+        const sourceSchema = NODE_SCHEMA[sourceNode?.type];
+        const targetSchema = NODE_SCHEMA[targetNode?.type];
+        const sourceIsAudio = sourceSchema?.outputs?.length > 0 &&
+                              sourceSchema?.category !== 'control' &&
+                              sourceSchema?.category !== 'script';
+        const targetHasModInput = targetSchema?.modInputs?.includes(paramKey);
+        const isAudioRate = sourceIsAudio && targetHasModInput;
+
         // Remove any existing modulation to this param, then add new one
         setConnections((prev) => {
           const filtered = prev.filter(
@@ -1080,6 +1322,7 @@ export default function GridView() {
               toNodeId: nodeId,
               toParam: paramKey,
               toPortIndex: -1,
+              isAudioRate,
             },
           ];
         });
@@ -1093,7 +1336,7 @@ export default function GridView() {
         );
       }
     },
-    [connecting]
+    [connecting, nodes]
   );
 
   // ── Node dragging ─────────────────────────────────────
@@ -1281,17 +1524,22 @@ export default function GridView() {
 
       const accent = NODE_SCHEMA[fromNode.type]?.accent || '#7a7570';
       const isMod = !!conn.toParam;
+      const isAudioRateMod = conn.isAudioRate && isMod;
 
+      // Cable styling:
+      // - Audio cables: thick, solid, 0.7 opacity
+      // - Audio-rate modulation: medium, solid, 0.65 opacity (audio signal for FM/AM)
+      // - Control-rate modulation: thin, dashed, 0.6 opacity
       paths.push(
         <path
           key={conn.id}
           d={cablePath(from.x, from.y, to.x, to.y)}
           stroke={accent}
-          strokeWidth={isMod ? 1.5 : 2.5}
+          strokeWidth={isAudioRateMod ? 2 : isMod ? 1.5 : 2.5}
           fill="none"
-          opacity={isMod ? 0.6 : 0.7}
-          strokeDasharray={isMod ? '4 3' : undefined}
-          className="sense-cable"
+          opacity={isAudioRateMod ? 0.65 : isMod ? 0.6 : 0.7}
+          strokeDasharray={isMod && !isAudioRateMod ? '4 3' : undefined}
+          className={`sense-cable${isAudioRateMod ? ' audio-rate-mod' : ''}`}
         />
       );
     }
@@ -1332,18 +1580,28 @@ export default function GridView() {
     const isEnvelope = node.type === 'envelope';
     const nodeWidth = schema.width || NODE_W;
 
-    // Check if this control/script module has any modulation connections
-    const hasModOutput = (isControl || isScript) && connections.some(
+    // Check if this module has any modulation output connections
+    // (control/script for control-rate, or any audio source for audio-rate)
+    const hasModOutput = connections.some(
       (c) => c.fromNodeId === node.id && c.toParam
     );
 
     // Build set of modulated params on this node
+    // Includes both control-rate (from control/script) and audio-rate (isAudioRate) connections
     const modulatedParams = {};
+    const audioRateModulatedParams = new Set();
     for (const conn of connections) {
       if (conn.toNodeId !== node.id || !conn.toParam) continue;
       const src = nodes[conn.fromNodeId];
-      const srcCat = NODE_SCHEMA[src?.type]?.category;
-      if (src && (srcCat === 'control' || srcCat === 'script')) {
+      const srcSchema = NODE_SCHEMA[src?.type];
+      const srcCat = srcSchema?.category;
+
+      if (conn.isAudioRate) {
+        // Audio-rate modulation (e.g., FM from another oscillator)
+        modulatedParams[conn.toParam] = 'audio';
+        audioRateModulatedParams.add(conn.toParam);
+      } else if (src && (srcCat === 'control' || srcCat === 'script')) {
+        // Control-rate modulation
         modulatedParams[conn.toParam] = src.params.value ?? 0;
       }
     }
@@ -1402,16 +1660,17 @@ export default function GridView() {
         {/* Parameter modulation input ports (left edge, aligned with each param row) */}
         {!isControl && !isScript && !isAudioOut && Object.keys(schema.params).map((key, i) => {
           const isModulated = key in modulatedParams;
+          const isAudioRateMod = audioRateModulatedParams.has(key);
           const showPort = connecting || isModulated;
           if (!showPort) return null;
 
           return (
             <div
               key={`mod-${key}`}
-              className={`node-port mod-input${connecting ? ' connectable' : ''}${isModulated ? ' modulated' : ''}`}
+              className={`node-port mod-input${connecting ? ' connectable' : ''}${isModulated ? ' modulated' : ''}${isAudioRateMod ? ' audio-rate' : ''}`}
               style={{ top: PARAM_START_Y + i * PARAM_ROW_H + PARAM_ROW_H / 2 - 4 }}
               onClick={(e) => handleParamPortClick(e, node.id, key)}
-              title={`mod: ${schema.params[key].label}`}
+              title={isAudioRateMod ? `audio mod: ${schema.params[key].label}` : `mod: ${schema.params[key].label}`}
             />
           );
         })}
@@ -1493,31 +1752,45 @@ export default function GridView() {
             {Object.entries(schema.params).map(([key, def]) => {
               if (def.hidden) return null;
               const isModulated = key in modulatedParams;
-              const displayVal = isModulated ? modulatedParams[key] : (node.params[key] ?? def.val);
+              const isAudioRateMod = audioRateModulatedParams.has(key);
+              // For audio-rate mod, show base value; for control-rate mod, show modulated value
+              const displayVal = isAudioRateMod
+                ? (node.params[key] ?? def.val)
+                : isModulated
+                  ? modulatedParams[key]
+                  : (node.params[key] ?? def.val);
+              // Audio-rate modulated params still use the base value for the slider
+              const sliderVal = isAudioRateMod
+                ? (node.params[key] ?? def.val)
+                : isModulated
+                  ? modulatedParams[key]
+                  : (node.params[key] ?? def.val);
 
               return (
-                <div className={`node-param${isModulated ? ' modulated' : ''}`} key={key}>
+                <div className={`node-param${isModulated ? ' modulated' : ''}${isAudioRateMod ? ' audio-rate-mod' : ''}`} key={key}>
                   <span className="param-label">{def.label}</span>
                   <input
                     type="range"
                     min={def.min}
                     max={def.max}
                     step={def.step}
-                    value={isModulated ? modulatedParams[key] : (node.params[key] ?? def.val)}
-                    disabled={isModulated}
+                    value={sliderVal}
+                    disabled={isModulated && !isAudioRateMod}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
                       handleParamChange(node.id, key, v);
                     }}
                   />
                   <span className="param-val">
-                    {key === 'freq' && node.quantize
-                      ? freqToNoteName(displayVal)
-                      : displayVal >= 100
-                        ? Math.round(displayVal)
-                        : displayVal.toFixed(
-                            def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                          )}
+                    {isAudioRateMod
+                      ? (key === 'freq' ? 'FM' : key === 'amp' ? 'AM' : 'PM')
+                      : key === 'freq' && node.quantize
+                        ? freqToNoteName(displayVal)
+                        : displayVal >= 100
+                          ? Math.round(displayVal)
+                          : displayVal.toFixed(
+                              def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                            )}
                   </span>
                 </div>
               );
@@ -1570,6 +1843,14 @@ export default function GridView() {
             disabled={!booted}
           >
             {panelOpen ? '— Hide Modules' : '+ Add Module'}
+          </button>
+
+          <button
+            className={`toolbar-btn console-toggle${consoleOpen ? ' active' : ''}`}
+            onClick={() => setConsoleOpen((p) => !p)}
+            disabled={!booted}
+          >
+            {consoleOpen ? '— Hide Console' : '> Console'}
           </button>
         </div>
 
@@ -1828,6 +2109,43 @@ export default function GridView() {
                         )}
                       </div>
                     </div>
+                  ) : selNode.type === 'print' ? (
+                    <div className="details-body">
+                      <div className="print-options">
+                        <div className="print-option">
+                          <label className="print-label">Prefix</label>
+                          <input
+                            type="text"
+                            className="print-prefix-input"
+                            value={selNode.printPrefix ?? 'print'}
+                            onChange={(e) =>
+                              handlePrintPrefix(selNode.id, e.target.value)
+                            }
+                            placeholder="prefix"
+                          />
+                        </div>
+                        <div className="print-option">
+                          <label className="print-label">Color</label>
+                          <input
+                            type="color"
+                            className="print-color-input"
+                            value={selNode.printColor || '#e07050'}
+                            onChange={(e) =>
+                              handlePrintColor(selNode.id, e.target.value)
+                            }
+                          />
+                          <span
+                            className="print-color-preview"
+                            style={{ color: selNode.printColor || '#e07050' }}
+                          >
+                            {selNode.printPrefix ?? 'print'}
+                          </span>
+                        </div>
+                        <div className="print-hint">
+                          Connect a signal to this module's input to log its values to the console.
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <div className="details-body">
                       <div className="details-placeholder">
@@ -1841,6 +2159,46 @@ export default function GridView() {
             </div>
           );
         })()}
+
+        {/* Print Console Panel */}
+        <div className={`print-console-panel${consoleOpen ? ' open' : ''}`}>
+          <div className="print-console-header">
+            <span className="print-console-title">Console</span>
+            <div className="print-console-actions">
+              <button
+                className="print-console-clear"
+                onClick={clearPrintLogs}
+              >
+                clear
+              </button>
+              <button
+                className="print-console-close"
+                onClick={() => setConsoleOpen(false)}
+              >
+                &times;
+              </button>
+            </div>
+          </div>
+          <div className="print-console-output" ref={printConsoleRef}>
+            {printLogs.map((entry) => (
+              <div key={entry.id} className="print-console-line">
+                <span className="print-console-time">{entry.time}</span>
+                <span
+                  className="print-console-prefix"
+                  style={{ color: entry.color }}
+                >
+                  [{entry.prefix}]
+                </span>
+                <span className="print-console-value">{entry.value}</span>
+              </div>
+            ))}
+            {printLogs.length === 0 && (
+              <div className="print-console-empty">
+                Add a Print module and connect a signal to see values here
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Status bar */}
         <div className="sense-status">

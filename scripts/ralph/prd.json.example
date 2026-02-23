@@ -1,0 +1,53 @@
+{
+  "project": "Example Feature",
+  "description": "A brief description of the overall feature being implemented",
+  "created": "2025-01-19",
+  "stories": [
+    {
+      "id": "story-001",
+      "title": "Add user preferences endpoint",
+      "description": "Create a new API endpoint that allows users to get and update their preferences",
+      "priority": 1,
+      "status": "pending",
+      "acceptance_criteria": [
+        "GET /api/users/:id/preferences returns current preferences",
+        "PATCH /api/users/:id/preferences updates preferences",
+        "Proper authentication required",
+        "Input validation for preference values"
+      ],
+      "services": ["api"],
+      "notes": ""
+    },
+    {
+      "id": "story-002",
+      "title": "Create preferences UI component",
+      "description": "Build a React component for displaying and editing user preferences",
+      "priority": 2,
+      "status": "pending",
+      "acceptance_criteria": [
+        "Component displays current preferences",
+        "Form allows editing preferences",
+        "Saves changes via API",
+        "Shows loading and error states"
+      ],
+      "services": ["customer"],
+      "dependencies": ["story-001"],
+      "notes": ""
+    },
+    {
+      "id": "story-003",
+      "title": "Add preferences to settings page",
+      "description": "Integrate the preferences component into the existing settings page",
+      "priority": 3,
+      "status": "pending",
+      "acceptance_criteria": [
+        "Preferences section visible on settings page",
+        "Proper navigation/tab structure",
+        "Mobile responsive"
+      ],
+      "services": ["customer"],
+      "dependencies": ["story-002"],
+      "notes": ""
+    }
+  ]
+}

@@ -65,14 +65,19 @@ for scd in "${files[@]}"; do
   wrapper=$(cat <<SCLANG
 ~outDir = "$OUT_DIR";
 thisProcess.interpreter.executeFile("$scd");
-0.5.wait;
-"DONE".postln;
-0.exit;
+AppClock.sched(0.5, {
+    "DONE".postln;
+    0.exit;
+});
 SCLANG
 )
 
-  # Run sclang headless (-i sclang suppresses IDE, timeout guards hangs)
-  if timeout 30 sclang -e "$wrapper" &>/tmp/sclang_build_$$.log; then
+  # Write wrapper to temp file (sclang doesn't support -e on all versions)
+  wrapper_file="/tmp/sclang_wrapper_$$.scd"
+  echo "$wrapper" > "$wrapper_file"
+
+  # Run sclang headless (timeout guards hangs)
+  if timeout 30 sclang "$wrapper_file" &>/tmp/sclang_build_$$.log; then
     # Verify at least one .scsyndef was produced (check mtime)
     new_files=$(find "$OUT_DIR" -name '*.scsyndef' -newer "$scd" 2>/dev/null | head -5)
     if [[ -n "$new_files" ]]; then
@@ -91,7 +96,7 @@ SCLANG
   fi
 done
 
-rm -f /tmp/sclang_build_$$.log
+rm -f /tmp/sclang_build_$$.log /tmp/sclang_wrapper_$$.scd
 
 echo ""
 echo "Done: $ok succeeded, $fail failed."

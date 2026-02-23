@@ -34,6 +34,12 @@ const FX_DEFS = [
   'sonic-pi-fx_hpf',
   'sonic-pi-fx_distortion',
   'sonic-pi-fx_flanger',
+  'multiply',
+  'print',
+];
+
+const SYSTEM_DEFS = [
+  'master_limiter',
 ];
 
 export class GridEngine {
@@ -41,8 +47,10 @@ export class GridEngine {
     this.sonic = null;
     this._nextId = 3000;
     this._active = new Map(); // graphNodeId → scsynth nodeId
+    this._idToGraph = new Map(); // scsynth nodeId → graphNodeId (reverse lookup)
     this.booted = false;
     this.onStatus = null;
+    this.onPrint = null; // callback for print module messages: (graphId, value) => void
 
     // Control bus allocator (buses 0–4095 available, separate from audio buses)
     this._nextControlBus = 0;
@@ -68,6 +76,24 @@ export class GridEngine {
       console.log('[GridEngine ctx]', e.state)
     );
 
+    // Listen for /c_set replies (control bus value responses)
+    this.sonic.on('message', (msg) => {
+      // /c_set format: ['/c_set', busIndex, value]
+      if (msg[0] === '/c_set' && this.onPrint) {
+        const busIndex = msg[1];
+        const value = msg[2];
+        // Look up which print module owns this control bus
+        const graphId = this._printBusToGraph.get(busIndex);
+        if (graphId != null) {
+          this.onPrint(graphId, value);
+        }
+      }
+    });
+
+    // Map of control bus index → graph node ID for print modules
+    this._printBusToGraph = new Map();
+    this._printPollingInterval = null;
+
     await this.sonic.init();
     await this.sonic.resume();
 
@@ -75,12 +101,17 @@ export class GridEngine {
     this.sonic.send('/g_new', 1, 0, 0);
     // Group 2: FX synths (processed after sources)
     this.sonic.send('/g_new', 2, 3, 1);
+    // Group 3: master output (processed last, for safety limiting)
+    this.sonic.send('/g_new', 3, 3, 2);
 
-    const allDefs = [...SOURCE_DEFS, ...FX_DEFS];
+    const allDefs = [...SOURCE_DEFS, ...FX_DEFS, ...SYSTEM_DEFS];
     for (const def of allDefs) {
       this.onStatus?.(`Loading ${def.replace('sonic-pi-', '')}…`);
       await this.sonic.loadSynthDef(def);
     }
+
+    // Start the master limiter (always running, clips bus 0 output)
+    this.sonic.send('/s_new', 'master_limiter', 2999, 0, 3);
 
     this.booted = true;
     this.onStatus?.('Ready · add modules and connect to Output');
@@ -93,6 +124,7 @@ export class GridEngine {
 
     const id = this._nextId++;
     this._active.set(graphId, id);
+    this._idToGraph.set(id, graphId);
 
     const flat = [];
     for (const [k, v] of Object.entries(params)) {
@@ -110,6 +142,7 @@ export class GridEngine {
 
     const id = this._nextId++;
     this._active.set(graphId, id);
+    this._idToGraph.set(id, graphId);
 
     const flat = [];
     for (const [k, v] of Object.entries(params)) {
@@ -145,8 +178,10 @@ export class GridEngine {
 
     const capturedId = id;
     const sonic = this.sonic;
+    const idToGraph = this._idToGraph;
     setTimeout(() => {
       try { sonic.send('/n_free', capturedId); } catch { /* ignore */ }
+      idToGraph.delete(capturedId);
     }, 400);
 
     this._active.delete(graphId);
@@ -200,6 +235,28 @@ export class GridEngine {
     }
   }
 
+  // ── Audio bus mapping (for audio-rate modulation) ──────────
+
+  // Map a synth parameter to read from an AUDIO bus (/n_mapa)
+  // Used for audio-rate modulation (e.g. FM synthesis)
+  mapParamToAudioBus(graphId, param, audioBusIndex) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try { this.sonic.send('/n_mapa', id, param, audioBusIndex); } catch { /* ignore */ }
+    }
+  }
+
+  // Unmap a parameter from its audio bus and restore a fixed value
+  unmapParamFromAudioBus(graphId, param, value) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try {
+        this.sonic.send('/n_mapa', id, param, -1);  // -1 = unmap
+        this.sonic.send('/n_set', id, param, value);
+      } catch { /* ignore */ }
+    }
+  }
+
   isPlaying(graphId) {
     return this._active.has(graphId);
   }
@@ -208,5 +265,54 @@ export class GridEngine {
     for (const graphId of [...this._active.keys()]) {
       this.stop(graphId);
     }
+  }
+
+  // ── Print module methods ────────────────────────────────
+
+  // Allocate a control bus for a print module and start polling
+  startPrintModule(graphId) {
+    // Allocate a control bus (use high indices to avoid conflicts)
+    const busIndex = 1000 + graphId;
+    this._printBusToGraph.set(busIndex, graphId);
+
+    // Start polling if not already running
+    if (!this._printPollingInterval) {
+      this._printPollingInterval = setInterval(() => {
+        for (const bus of this._printBusToGraph.keys()) {
+          if (this.booted) {
+            try {
+              this.sonic.send('/c_get', bus);
+            } catch { /* ignore */ }
+          }
+        }
+      }, 100); // Poll at 10 Hz
+    }
+
+    return busIndex;
+  }
+
+  // Stop polling for a print module
+  stopPrintModule(graphId) {
+    // Find and remove the bus mapping
+    for (const [bus, id] of this._printBusToGraph.entries()) {
+      if (id === graphId) {
+        this._printBusToGraph.delete(bus);
+        break;
+      }
+    }
+
+    // Stop polling if no more print modules
+    if (this._printBusToGraph.size === 0 && this._printPollingInterval) {
+      clearInterval(this._printPollingInterval);
+      this._printPollingInterval = null;
+    }
+  }
+
+  // Get the control bus index for a print module
+  getPrintBus(graphId) {
+    for (const [bus, id] of this._printBusToGraph.entries()) {
+      if (id === graphId) return bus;
+    }
+    return null;
   }
 }

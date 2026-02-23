@@ -1,0 +1,137 @@
+# Ralph Sandbox Docker Compose
+# Runs Ralph in an isolated environment with all dependencies
+#
+# Usage:
+#   ./ralph-docker.sh run          # Run Ralph loop
+#   ./ralph-docker.sh shell        # Interactive shell
+#   ./ralph-docker.sh test         # Run tests only
+#   ./ralph-docker.sh login        # Authenticate Claude CLI
+
+services:
+  ralph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+        NODE_VERSION: "22"
+        RUBY_VERSION: "3.1.6"
+    # No hardcoded container_name - allows parallel execution via docker compose -p <project>
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+
+    # Required for network restrictions (iptables)
+    cap_add:
+      - NET_ADMIN
+
+    volumes:
+      # Mount the project (read-write for Ralph to make changes)
+      # RALPH_PROJECT_ROOT allows running in worktrees
+      - ${RALPH_PROJECT_ROOT:-../../..}:/workspace
+
+      # Mount main repo's .git directory at its original path for worktree support
+      # Worktrees have a .git file with an absolute path to the main repo's .git/worktrees/<name>
+      # This mount ensures that path is valid inside the container
+      # Read-write is needed for commits; push restrictions are enforced via pre-push hook
+      - ${RALPH_MAIN_REPO_ROOT:-.}/.git:${RALPH_MAIN_REPO_ROOT:-.}/.git:rw
+
+      # Mount Claude credentials from host (read-write needed for debug logs)
+      - ~/.claude:/home/ralph/.claude:rw
+
+      # Cache volumes for faster rebuilds
+      - ralph-node-modules-customer:/workspace/customer/node_modules
+      - ralph-node-modules-admin:/workspace/shopify-admin/node_modules
+      - ralph-bundle-cache:/workspace/api/vendor/bundle
+
+      # Git config for commits
+      - ~/.gitconfig:/home/ralph/.gitconfig:ro
+
+    environment:
+      # Database connection
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=ralph
+      - PGPASSWORD=ralph
+      - PGDATABASE=camp_test
+      - DATABASE_URL=postgresql://ralph:ralph@postgres:5432/camp_test
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Ralph configuration
+      - RALPH_MAX_ITERATIONS=${RALPH_MAX_ITERATIONS:-10}
+      - RALPH_SANDBOX_MODE=true
+      - RALPH_INSTALL_DEPS=${RALPH_INSTALL_DEPS:-false}
+      - RALPH_SETUP_DB=${RALPH_SETUP_DB:-false}
+      - RALPH_REQUIRE_AUTH=${RALPH_REQUIRE_AUTH:-false}
+
+      # Authentication (in priority order):
+      # 1. CLAUDE_CODE_OAUTH_TOKEN - OAuth token from 'claude setup-token' (uses Max subscription)
+      # 2. ANTHROPIC_API_KEY - API key (uses pay-per-use credits)
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # Headless testing
+      - CI=true
+      - HEADLESS=true
+      - DISPLAY=:99
+      - CHROME_BIN=/usr/bin/chromium-browser
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+      # Rails environment
+      - RAILS_ENV=test
+      - RACK_ENV=test
+      - NODE_ENV=test
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - ralph-network
+
+  # PostgreSQL for API tests
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=ralph
+      - POSTGRES_PASSWORD=ralph
+      - POSTGRES_DB=camp_test
+    volumes:
+      - ralph-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ralph -d camp_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ralph-network
+
+  # Redis for Sidekiq/caching
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ralph-redis-data:/data
+    networks:
+      - ralph-network
+
+volumes:
+  ralph-postgres-data:
+  ralph-redis-data:
+  ralph-node-modules-customer:
+  ralph-node-modules-admin:
+  ralph-bundle-cache:
+
+networks:
+  ralph-network:
+    driver: bridge
