@@ -90,6 +90,10 @@ const NODE_SCHEMA = {
       amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
       phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
     },
+    // Map from UI param names to audio-rate synthdef params for FM/AM/PM.
+    // When an audio source modulates 'freq', route to the 'fm' input instead
+    // so the modulator signal is ADDED to the base frequency.
+    audioModMap: { freq: 'fm' },
   },
   saw: {
     label: 'Saw',
@@ -438,6 +442,18 @@ function computeLiveNodes(nodes, connections) {
     connections
       .filter((c) => c.toNodeId === cur && !c.toParam)
       .forEach((c) => queue.push(c.fromNodeId));
+    // Also include audio sources connected via modulation cables (e.g. FM synthesis).
+    // These need to run as synths so their audio output can modulate a parameter.
+    connections
+      .filter((c) => c.toNodeId === cur && c.toParam)
+      .forEach((c) => {
+        const srcNode = nodes[c.fromNodeId];
+        const srcSchema = NODE_SCHEMA[srcNode?.type];
+        // Only follow if the source is an audio-producing synth (not control/script)
+        if (srcSchema?.synthDef && srcSchema.category !== 'control' && srcSchema.category !== 'script') {
+          queue.push(c.fromNodeId);
+        }
+      });
   }
 
   live.delete(outNode.id); // AudioOut itself doesn't play audio
@@ -553,6 +569,7 @@ export default function GridView() {
   // ── Sync audio with live node set & bus routing ──────
   const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
   const prevModRef = useRef({});     // `${nodeId}:${param}` → { busIndex }
+  const prevAudioModRef = useRef({}); // `${nodeId}:${param}` → { audioBus, synthParam }
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -582,6 +599,43 @@ export default function GridView() {
       }
     }
 
+    // ── 1b. Detect audio-rate modulation connections (FM synthesis) ──
+    // When an audio source (e.g. sine_osc) is connected to another module's
+    // parameter, allocate a private audio bus. The modulator writes to this
+    // bus and the target reads from it via /n_mapa for audio-rate modulation.
+    const audioModBuses = {};   // sourceNodeId → audioBusIndex
+    const audioModMappings = []; // { targetNodeId, param, synthParam, audioBus }
+
+    for (const conn of connections) {
+      if (!conn.toParam) continue;
+      const sourceNode = nodes[conn.fromNodeId];
+      const targetNode = nodes[conn.toNodeId];
+      if (!sourceNode || !targetNode) continue;
+
+      const sourceSchema = NODE_SCHEMA[sourceNode.type];
+      // Only handle audio sources (those with a synthDef, not control/script)
+      if (!sourceSchema?.synthDef) continue;
+      if (sourceSchema.category === 'control' || sourceSchema.category === 'script') continue;
+      if (!live.has(conn.fromNodeId)) continue;
+
+      const targetSchema = NODE_SCHEMA[targetNode.type];
+      // Resolve the actual synthdef param name via audioModMap (e.g. freq → fm)
+      const synthParam = targetSchema?.audioModMap?.[conn.toParam] || conn.toParam;
+
+      // Allocate an audio bus for this modulator (shared across targets)
+      if (!(conn.fromNodeId in audioModBuses)) {
+        audioModBuses[conn.fromNodeId] = nextBus;
+        nextBus += 2; // stereo pair
+      }
+
+      audioModMappings.push({
+        targetNodeId: conn.toNodeId,
+        param: conn.toParam,
+        synthParam,
+        audioBus: audioModBuses[conn.fromNodeId],
+      });
+    }
+
     // ── 2. Compute per-node routing ──
     const nodeRouting = {}; // nodeId → { outBus, inBus, isFx }
     for (const id of live) {
@@ -593,7 +647,13 @@ export default function GridView() {
       const outConn = connections.find(
         (c) => c.fromNodeId === id && !c.toParam && (live.has(c.toNodeId) || c.toNodeId === outNode.id)
       );
-      const outBus = outConn ? (connBus[outConn.id] ?? 0) : 0;
+      let outBus = outConn ? (connBus[outConn.id] ?? 0) : 0;
+
+      // If this node is an audio modulator with no audio cable to output,
+      // route its output to the modulation audio bus instead.
+      if (id in audioModBuses && !outConn) {
+        outBus = audioModBuses[id];
+      }
 
       // Incoming audio connection to this node's input (only for FX)
       let inBus;
@@ -670,8 +730,19 @@ export default function GridView() {
       }
     }
 
-    // ── 6. Stop FX whose routing changed (need restart for correct ordering) ──
+    // ── 6. Stop nodes whose routing changed (need restart) ──
     const prevRouting = prevRoutingRef.current;
+    // Stop source nodes whose outBus changed (e.g. modulators rerouted)
+    for (const id of sources) {
+      if (engine.isPlaying(id)) {
+        const prev = prevRouting[id];
+        const cur = nodeRouting[id];
+        if (prev && prev.outBus !== cur.outBus) {
+          engine.stop(id);
+        }
+      }
+    }
+    // Stop FX whose routing changed (need restart for correct ordering)
     for (const id of fxOrder) {
       if (engine.isPlaying(id)) {
         const prev = prevRouting[id];
@@ -778,6 +849,35 @@ export default function GridView() {
     }
 
     prevModRef.current = currentMod;
+
+    // ── 11. Apply audio-rate modulation (FM synthesis) ──
+    // For each audio modulation connection, map the target's synthdef param
+    // to read from the modulator's audio bus via /n_mapa.
+    const prevAudioMod = prevAudioModRef.current;
+    const currentAudioMod = {};
+
+    for (const mapping of audioModMappings) {
+      const modKey = `${mapping.targetNodeId}:${mapping.synthParam}`;
+      currentAudioMod[modKey] = {
+        audioBus: mapping.audioBus,
+        synthParam: mapping.synthParam,
+      };
+
+      if (engine.isPlaying(mapping.targetNodeId)) {
+        engine.mapAudioParam(mapping.targetNodeId, mapping.synthParam, mapping.audioBus);
+      }
+    }
+
+    // Unmap audio-rate params that are no longer modulated
+    for (const [modKey, info] of Object.entries(prevAudioMod)) {
+      if (!(modKey in currentAudioMod)) {
+        const sepIdx = modKey.indexOf(':');
+        const nodeId = parseInt(modKey.slice(0, sepIdx));
+        engine.unmapAudioParam(nodeId, info.synthParam, 0);
+      }
+    }
+
+    prevAudioModRef.current = currentAudioMod;
 
     // Save routing state for next sync
     prevRoutingRef.current = nodeRouting;
@@ -1342,9 +1442,14 @@ export default function GridView() {
     for (const conn of connections) {
       if (conn.toNodeId !== node.id || !conn.toParam) continue;
       const src = nodes[conn.fromNodeId];
-      const srcCat = NODE_SCHEMA[src?.type]?.category;
-      if (src && (srcCat === 'control' || srcCat === 'script')) {
+      const srcSchema = NODE_SCHEMA[src?.type];
+      if (!src || !srcSchema) continue;
+      const srcCat = srcSchema.category;
+      if (srcCat === 'control' || srcCat === 'script') {
         modulatedParams[conn.toParam] = src.params.value ?? 0;
+      } else if (srcSchema.synthDef) {
+        // Audio-rate modulation (FM synthesis etc.) — mark as modulated
+        modulatedParams[conn.toParam] = 'audio';
       }
     }
 
@@ -1493,31 +1598,42 @@ export default function GridView() {
             {Object.entries(schema.params).map(([key, def]) => {
               if (def.hidden) return null;
               const isModulated = key in modulatedParams;
-              const displayVal = isModulated ? modulatedParams[key] : (node.params[key] ?? def.val);
+              const isAudioMod = isModulated && modulatedParams[key] === 'audio';
+              const isControlMod = isModulated && !isAudioMod;
+              // For audio modulation the slider still controls the base value;
+              // for control modulation the slider shows the bus value.
+              const sliderVal = isControlMod ? modulatedParams[key] : (node.params[key] ?? def.val);
+              const displayVal = sliderVal;
 
               return (
-                <div className={`node-param${isModulated ? ' modulated' : ''}`} key={key}>
+                <div className={`node-param${isModulated ? ' modulated' : ''}${isAudioMod ? ' audio-mod' : ''}`} key={key}>
                   <span className="param-label">{def.label}</span>
                   <input
                     type="range"
                     min={def.min}
                     max={def.max}
                     step={def.step}
-                    value={isModulated ? modulatedParams[key] : (node.params[key] ?? def.val)}
-                    disabled={isModulated}
+                    value={sliderVal}
+                    disabled={isControlMod}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
                       handleParamChange(node.id, key, v);
                     }}
                   />
                   <span className="param-val">
-                    {key === 'freq' && node.quantize
-                      ? freqToNoteName(displayVal)
-                      : displayVal >= 100
-                        ? Math.round(displayVal)
-                        : displayVal.toFixed(
-                            def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                          )}
+                    {isAudioMod
+                      ? '~ ' + (key === 'freq' && node.quantize
+                          ? freqToNoteName(displayVal)
+                          : displayVal >= 100
+                            ? Math.round(displayVal)
+                            : displayVal.toFixed(def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0))
+                      : key === 'freq' && node.quantize
+                        ? freqToNoteName(displayVal)
+                        : displayVal >= 100
+                          ? Math.round(displayVal)
+                          : displayVal.toFixed(
+                              def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                            )}
                   </span>
                 </div>
               );

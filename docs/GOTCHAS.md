@@ -153,4 +153,31 @@ setTimeout(() => {
 
 ---
 
+## 7. FM Synthesis Requires Audio-Rate Bus Mapping (/n_mapa), Not Control Buses
+
+**Symptom:** Connecting a Sine Osc module's output to another Sine Osc's frequency parameter in the Grid View produces no audible modulation effect — the carrier frequency stays constant.
+
+**Root cause:** Three issues compounded:
+
+1. **`computeLiveNodes` skipped modulation connections** — A source module connected only via a modulation cable (to a parameter port) was never considered "live" and never started as a synth. The BFS traversal only followed audio cables (`!c.toParam`).
+
+2. **Modulation routing only handled control/script sources** — Step 10 of the routing sync explicitly filtered to `category === 'control' || category === 'script'`, so audio sources like `sine_osc` were ignored entirely.
+
+3. **Control buses are too slow for FM** — Even if the routing had included audio sources, `/n_map` maps to a control bus (~689 Hz update rate). True FM synthesis requires audio-rate modulation (~44,100 Hz), which needs `/n_mapa` (map to audio bus).
+
+4. **Direct replacement loses the base frequency** — Mapping `freq` to an audio bus via `/n_mapa` replaces the parameter entirely. For FM synthesis you need `baseFreq + modulator`, not just `modulator`.
+
+**Fix:**
+
+- Updated the `sine` SynthDef to have a control-rate `freq` (base frequency) and a separate audio-rate `fm` input that's additive: `SinOsc.ar(freq + fm, phase)`.
+- Added `audioModMap: { freq: 'fm' }` to the `sine_osc` schema, so the grid transparently routes "freq" modulation connections to the `fm` synthdef parameter.
+- Extended `computeLiveNodes` to follow modulation connections from audio-producing sources.
+- Added step 1b (audio modulation bus allocation) and step 11 (audio-rate mapping via `/n_mapa`) to the routing sync.
+- Added `mapAudioParam()` and `unmapAudioParam()` to `GridEngine` using `/n_mapa`.
+- Generated `sine.scsyndef` binary via `synthdefs/build-sine.cjs` (no sclang required).
+
+**Reference:** `src/GridView.jsx` (routing sync steps 1b, 11), `src/audio/gridEngine.js:202-221`, `synthdefs/src/sine.scd`, `synthdefs/build-sine.cjs`
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

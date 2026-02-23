@@ -1,17 +1,17 @@
 // ════════════════════════════════════════════════════════════
 //  sine.scd
 //
-//  Audio-rate sine oscillator with modulatable frequency,
-//  amplitude, and phase inputs.
-//
-//  All three signal inputs default to fixed values but accept
-//  audio-rate modulation — connect an LFO or envelope to the
-//  corresponding bus for FM, AM, or phase-modulation effects.
+//  Sine oscillator with control-rate base frequency and an
+//  audio-rate FM input for frequency modulation.  The actual
+//  oscillator frequency is (freq + fm) — connect another
+//  oscillator's output to the `fm` parameter for FM synthesis.
 //
 //  Build:  npm run build:synthdefs -- sine.scd
+//          (or: node synthdefs/build-sine.cjs)
 //
 //  Parameters:
-//    freq      oscillator frequency in Hz          (ar, default 440)
+//    freq      base oscillator frequency in Hz     (kr, default 440)
+//    fm        FM modulation input, additive Hz    (ar, default 0)
 //    amp       output amplitude                    (ar, default 0.5)
 //    phase     phase offset in radians             (ar, default 0)
 //    pan       stereo position -1..+1              (kr, default 0)
@@ -22,11 +22,12 @@ var outDir = ~outDir ?? (thisProcess.platform.recordingsDir +/+ "ora-fm-synthdef
 outDir.mkdir;
 
 SynthDef(\sine, {
-    var freq  = \freq.ar(440);
+    var freq  = \freq.kr(440);
+    var fm    = \fm.ar(0);
     var amp   = \amp.ar(0.5);
     var phase = \phase.ar(0);
 
-    var sig = SinOsc.ar(freq, phase) * amp;
+    var sig = SinOsc.ar(freq + fm, phase) * amp;
 
     Out.ar(\out_bus.kr(0), Pan2.ar(sig, \pan.kr(0)));
 }).writeDefFile(outDir);

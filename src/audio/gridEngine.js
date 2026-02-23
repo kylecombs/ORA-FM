@@ -200,6 +200,26 @@ export class GridEngine {
     }
   }
 
+  // Map a synth parameter to read from an audio bus (/n_mapa)
+  // Used for audio-rate modulation (e.g. FM synthesis)
+  mapAudioParam(graphId, param, audioBusIndex) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try { this.sonic.send('/n_mapa', id, param, audioBusIndex); } catch { /* ignore */ }
+    }
+  }
+
+  // Unmap an audio-rate parameter and restore a fixed value
+  unmapAudioParam(graphId, param, value) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try {
+        this.sonic.send('/n_mapa', id, param, -1);  // -1 = unmap
+        this.sonic.send('/n_set', id, param, value);
+      } catch { /* ignore */ }
+    }
+  }
+
   isPlaying(graphId) {
     return this._active.has(graphId);
   }
