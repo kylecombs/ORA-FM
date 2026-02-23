@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
 import { ScriptRunner } from './audio/scriptRunner';
+import { EnvelopeRunner } from './audio/envelopeRunner';
+import BreakpointEditor from './BreakpointEditor';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { createTheme } from '@uiw/codemirror-themes';
@@ -42,6 +44,23 @@ const oraTheme = createTheme({
   ],
 });
 
+// ── Frequency quantisation (12-TET, A4 = 440 Hz) ─────────
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+function quantizeFreq(hz) {
+  if (hz <= 0) return hz;
+  const semitone = 12 * Math.log2(hz / 440);
+  return 440 * Math.pow(2, Math.round(semitone) / 12);
+}
+
+function freqToNoteName(hz) {
+  if (hz <= 0) return '—';
+  const midi = Math.round(69 + 12 * Math.log2(hz / 440));
+  const name = NOTE_NAMES[((midi % 12) + 12) % 12];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${name}${octave}`;
+}
+
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
   sine: {
@@ -57,6 +76,19 @@ const NODE_SCHEMA = {
       attack:  { label: 'atk',  min: 0,  max: 5,    step: 0.1,  val: 0.1 },
       sustain: { label: 'sus',  min: 0.1,max: 9999, step: 1,    val: 9999 },
       release: { label: 'rel',  min: 0,  max: 10,   step: 0.1,  val: 1 },
+    },
+  },
+  sine_osc: {
+    label: 'Sine Osc',
+    desc: 'modulatable sine',
+    accent: '#b89a6a',
+    synthDef: 'sine',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      freq:  { label: 'freq',  min: 20,  max: 20000, step: 0.1,  val: 440 },
+      amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
     },
   },
   saw: {
@@ -281,6 +313,20 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 127, step: 0.01, val: 60 },
     },
   },
+  envelope: {
+    label: 'Envelope',
+    desc: 'breakpoint editor',
+    accent: '#c8b060',
+    synthDef: null,
+    category: 'control',
+    width: 280,
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'out', min: 0, max: 1, step: 0.001, val: 0, hidden: true },
+      trig:  { label: 'trig', min: 0, max: 1, step: 1, val: 0, hidden: true },
+    },
+  },
   audioOut: {
     label: 'Output',
     desc: 'audio destination',
@@ -298,7 +344,7 @@ const MODULE_CATEGORIES = [
     id: 'oscillators',
     label: 'Oscillators',
     desc: 'basic waveforms',
-    types: ['sine', 'saw'],
+    types: ['sine', 'sine_osc', 'saw'],
   },
   {
     id: 'instruments',
@@ -334,7 +380,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant'],
+    types: ['constant', 'envelope'],
   },
 ];
 
@@ -344,10 +390,14 @@ const HEADER_H = 32;
 const PORT_SECTION_Y = HEADER_H + 2;
 const PORT_SPACING = 22;
 
+function getNodeWidth(node) {
+  return NODE_SCHEMA[node.type]?.width || NODE_W;
+}
+
 function getPortPos(node, portType, portIndex) {
   const y = node.y + PORT_SECTION_Y + 11 + portIndex * PORT_SPACING;
   if (portType === 'output') {
-    return { x: node.x + NODE_W, y };
+    return { x: node.x + getNodeWidth(node), y };
   }
   return { x: node.x, y };
 }
@@ -358,6 +408,10 @@ const PARAM_START_Y = HEADER_H + 1 + 6; // header + border + top padding
 const PARAM_ROW_H = 18;
 
 function getParamPortPos(node, schema, paramKey) {
+  // Envelope trigger port: vertically centered on the canvas area
+  if (node.type === 'envelope' && paramKey === 'trig') {
+    return { x: node.x, y: node.y + HEADER_H + 60 };
+  }
   const paramKeys = Object.keys(schema.params);
   const idx = paramKeys.indexOf(paramKey);
   if (idx === -1) return { x: node.x, y: node.y };
@@ -434,6 +488,10 @@ export default function GridView() {
   const [runningScripts, setRunningScripts] = useState(new Set());
   const [scriptLogs, setScriptLogs] = useState({}); // nodeId → string[]
 
+  // Envelope runtime state
+  const envelopeRunnerRef = useRef(null);
+  const [runningEnvelopes, setRunningEnvelopes] = useState(new Set());
+
   // Instrument panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelSearch, setPanelSearch] = useState('');
@@ -471,9 +529,24 @@ export default function GridView() {
       },
     });
 
+    envelopeRunnerRef.current = new EnvelopeRunner((nodeId, value) => {
+      setNodes((prev) => {
+        const node = prev[nodeId];
+        if (!node) return prev;
+        return {
+          ...prev,
+          [nodeId]: {
+            ...node,
+            params: { ...node.params, value },
+          },
+        };
+      });
+    });
+
     return () => {
       engineRef.current?.stopAll();
       scriptRunnerRef.current?.stopAll();
+      envelopeRunnerRef.current?.stopAll();
     };
   }, []);
 
@@ -619,11 +692,11 @@ export default function GridView() {
       const pan = routing.pan ?? 0;
 
       if (!engine.isPlaying(id)) {
-        engine.play(id, schema.synthDef, {
-          ...node.params,
-          pan,
-          out_bus: routing.outBus,
-        });
+        const playParams = { ...node.params, pan, out_bus: routing.outBus };
+        if (node.quantize && playParams.freq != null) {
+          playParams.freq = quantizeFreq(playParams.freq);
+        }
+        engine.play(id, schema.synthDef, playParams);
       } else {
         engine.setParam(id, 'pan', pan);
         engine.setParam(id, 'out_bus', routing.outBus);
@@ -752,6 +825,17 @@ export default function GridView() {
     if (schema.category === 'script') {
       node.code = '// Write your script here\n// Output values with: out(value)\n';
     }
+    if (type === 'envelope') {
+      node.breakpoints = [
+        { time: 0, value: 0 },
+        { time: 0.15, value: 1 },
+        { time: 0.4, value: 0.6 },
+        { time: 1, value: 0 },
+      ];
+      node.curves = [0, 0, -2];
+      node.duration = 2;
+      node.loop = false;
+    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -767,7 +851,13 @@ export default function GridView() {
     (id) => {
       engineRef.current?.stop(id);
       scriptRunnerRef.current?.stop(id);
+      envelopeRunnerRef.current?.stop(id);
       setRunningScripts((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setRunningEnvelopes((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
@@ -787,14 +877,19 @@ export default function GridView() {
 
   // ── Param change ──────────────────────────────────────
   const handleParamChange = useCallback((nodeId, param, value) => {
-    setNodes((prev) => ({
-      ...prev,
-      [nodeId]: {
-        ...prev[nodeId],
-        params: { ...prev[nodeId].params, [param]: value },
-      },
-    }));
-    engineRef.current?.setParam(nodeId, param, value);
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      // Quantize freq to nearest note when the flag is on
+      const sent = (param === 'freq' && node?.quantize) ? quantizeFreq(value) : value;
+      engineRef.current?.setParam(nodeId, param, sent);
+      return {
+        ...prev,
+        [nodeId]: {
+          ...node,
+          params: { ...node.params, [param]: value },
+        },
+      };
+    });
   }, []);
 
   // ── Script code change ──────────────────────────────────
@@ -825,6 +920,139 @@ export default function GridView() {
       return next;
     });
   }, []);
+
+  // ── Quantize toggle ──────────────────────────────────
+  const handleQuantizeToggle = useCallback((nodeId, enabled) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      const updated = { ...node, quantize: enabled };
+      // Re-send freq immediately with (or without) quantisation
+      if (node.params.freq != null) {
+        const sent = enabled ? quantizeFreq(node.params.freq) : node.params.freq;
+        engineRef.current?.setParam(nodeId, 'freq', sent);
+      }
+      return { ...prev, [nodeId]: updated };
+    });
+  }, []);
+
+  // ── Envelope handlers ──────────────────────────────────
+  const handleBreakpointsChange = useCallback((nodeId, breakpoints, curves) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], breakpoints, curves },
+    }));
+  }, []);
+
+  const handleEnvelopeDuration = useCallback((nodeId, duration) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], duration },
+    }));
+  }, []);
+
+  const handleEnvelopeLoop = useCallback((nodeId, loop) => {
+    setNodes((prev) => ({
+      ...prev,
+      [nodeId]: { ...prev[nodeId], loop },
+    }));
+  }, []);
+
+  const handleEnvelopeTrigger = useCallback((nodeId) => {
+    const runner = envelopeRunnerRef.current;
+    if (!runner) return;
+
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      if (!node) return prev;
+      runner.trigger(
+        nodeId,
+        node.breakpoints,
+        node.curves,
+        node.duration,
+        node.loop
+      );
+      return prev;
+    });
+    setRunningEnvelopes((prev) => new Set(prev).add(nodeId));
+
+    // Poll for completion to clear the running state
+    const checkDone = setInterval(() => {
+      if (!envelopeRunnerRef.current?.isRunning(nodeId)) {
+        clearInterval(checkDone);
+        setRunningEnvelopes((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeId);
+          return next;
+        });
+      }
+    }, 100);
+  }, []);
+
+  const handleEnvelopeStop = useCallback((nodeId) => {
+    envelopeRunnerRef.current?.stop(nodeId);
+    setRunningEnvelopes((prev) => {
+      const next = new Set(prev);
+      next.delete(nodeId);
+      return next;
+    });
+  }, []);
+
+  const getEnvelopeProgress = useCallback((nodeId) => {
+    return envelopeRunnerRef.current?.getProgress(nodeId) || null;
+  }, []);
+
+  // ── External trigger detection (rising-edge on modulated trig param) ──
+  const prevTrigVals = useRef({}); // nodeId → previous trigger source value
+
+  useEffect(() => {
+    const prev = prevTrigVals.current;
+
+    for (const conn of connections) {
+      if (conn.toParam !== 'trig') continue;
+
+      const targetNode = nodes[conn.toNodeId];
+      if (!targetNode || targetNode.type !== 'envelope') continue;
+
+      const sourceNode = nodes[conn.fromNodeId];
+      if (!sourceNode) continue;
+
+      const srcSchema = NODE_SCHEMA[sourceNode.type];
+      if (srcSchema?.category !== 'control' && srcSchema?.category !== 'script') continue;
+
+      const value = sourceNode.params.value ?? 0;
+      const prevValue = prev[conn.toNodeId] ?? 0;
+
+      // Rising edge: crossed above 0.5
+      if (value >= 0.5 && prevValue < 0.5) {
+        const runner = envelopeRunnerRef.current;
+        if (runner) {
+          const envId = conn.toNodeId;
+          runner.trigger(
+            envId,
+            targetNode.breakpoints,
+            targetNode.curves,
+            targetNode.duration,
+            targetNode.loop
+          );
+          setRunningEnvelopes((s) => new Set(s).add(envId));
+
+          // Poll for completion to clear running state
+          const check = setInterval(() => {
+            if (!envelopeRunnerRef.current?.isRunning(envId)) {
+              clearInterval(check);
+              setRunningEnvelopes((s) => {
+                const next = new Set(s);
+                next.delete(envId);
+                return next;
+              });
+            }
+          }, 100);
+        }
+      }
+
+      prev[conn.toNodeId] = value;
+    }
+  }, [nodes, connections]);
 
   // ── Param port click (modulation connect/disconnect) ──
   const handleParamPortClick = useCallback(
@@ -870,7 +1098,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1101,6 +1329,8 @@ export default function GridView() {
     const isFx = schema.category === 'fx';
     const isControl = schema.category === 'control';
     const isScript = schema.category === 'script';
+    const isEnvelope = node.type === 'envelope';
+    const nodeWidth = schema.width || NODE_W;
 
     // Check if this control/script module has any modulation connections
     const hasModOutput = (isControl || isScript) && connections.some(
@@ -1122,10 +1352,11 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl ? ' control' : ''}${isScript ? ' script' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
+          width: nodeWidth,
           '--accent': schema.accent,
         }}
         onMouseDown={(e) => startDrag(e, node.id)}
@@ -1155,6 +1386,18 @@ export default function GridView() {
             <span className="port-label port-label-out">{name}</span>
           </div>
         ))}
+
+        {/* Envelope trigger input port (always visible on left edge, centered on canvas) */}
+        {isEnvelope && (
+          <div
+            className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
+            style={{ top: HEADER_H + 60 - 4 }}
+            onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
+            title="trigger input"
+          >
+            <span className="port-label port-label-in">trig</span>
+          </div>
+        )}
 
         {/* Parameter modulation input ports (left edge, aligned with each param row) */}
         {!isControl && !isScript && !isAudioOut && Object.keys(schema.params).map((key, i) => {
@@ -1188,10 +1431,67 @@ export default function GridView() {
           )}
         </div>
 
-        {/* Parameters */}
-        {Object.keys(schema.params).length > 0 && (
+        {/* Envelope editor */}
+        {isEnvelope && (
+          <div className="envelope-body">
+            <BreakpointEditor
+              breakpoints={node.breakpoints || []}
+              curves={node.curves || []}
+              onChange={(bps, crvs) => handleBreakpointsChange(node.id, bps, crvs)}
+              accentColor={schema.accent}
+              getPlaybackProgress={getEnvelopeProgress}
+              nodeId={node.id}
+            />
+            <div className="envelope-controls">
+              {runningEnvelopes.has(node.id) ? (
+                <button
+                  className="env-btn env-btn-stop"
+                  onClick={() => handleEnvelopeStop(node.id)}
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  className="env-btn env-btn-trig"
+                  onClick={() => handleEnvelopeTrigger(node.id)}
+                >
+                  Trig
+                </button>
+              )}
+              <label className="env-dur">
+                <span className="env-dur-label">dur</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  max="60"
+                  step="0.1"
+                  value={node.duration ?? 2}
+                  onChange={(e) =>
+                    handleEnvelopeDuration(node.id, parseFloat(e.target.value) || 2)
+                  }
+                />
+                <span className="env-dur-unit">s</span>
+              </label>
+              <label className="env-loop">
+                <input
+                  type="checkbox"
+                  checked={node.loop || false}
+                  onChange={(e) => handleEnvelopeLoop(node.id, e.target.checked)}
+                />
+                <span className="env-loop-label">loop</span>
+              </label>
+              <span className="env-out-val">
+                {(node.params.value ?? 0).toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Parameters (skip hidden params, skip for envelope) */}
+        {!isEnvelope && Object.keys(schema.params).length > 0 && (
           <div className="node-params">
             {Object.entries(schema.params).map(([key, def]) => {
+              if (def.hidden) return null;
               const isModulated = key in modulatedParams;
               const displayVal = isModulated ? modulatedParams[key] : (node.params[key] ?? def.val);
 
@@ -1211,11 +1511,13 @@ export default function GridView() {
                     }}
                   />
                   <span className="param-val">
-                    {displayVal >= 100
-                      ? Math.round(displayVal)
-                      : displayVal.toFixed(
-                          def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                        )}
+                    {key === 'freq' && node.quantize
+                      ? freqToNoteName(displayVal)
+                      : displayVal >= 100
+                        ? Math.round(displayVal)
+                        : displayVal.toFixed(
+                            def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                          )}
                   </span>
                 </div>
               );
@@ -1235,7 +1537,7 @@ export default function GridView() {
         )}
 
         {/* Live indicator */}
-        {(isLive || hasModOutput || runningScripts.has(node.id)) && <div className="node-live-dot" />}
+        {(isLive || hasModOutput || runningScripts.has(node.id) || runningEnvelopes.has(node.id)) && <div className="node-live-dot" />}
       </div>
     );
   };
@@ -1401,7 +1703,17 @@ export default function GridView() {
                     </button>
                   </div>
 
-                  {selSchema.category === 'script' ? (
+                  {selNode.type === 'envelope' ? (
+                    <div className="details-body">
+                      <div className="details-placeholder">
+                        Edit the envelope directly on the canvas.
+                        <br /><br />
+                        Click to add breakpoints, drag to move them.
+                        Double-click a point to remove it.
+                        Drag a curve segment up/down to adjust curvature.
+                      </div>
+                    </div>
+                  ) : selSchema.category === 'script' ? (
                     <div className="details-body">
                       <div className="script-editor-section">
                         <div className="script-editor-header">
@@ -1490,6 +1802,30 @@ export default function GridView() {
                             </div>
                           )}
                         </div>
+                      </div>
+                    </div>
+                  ) : selNode.type === 'sine_osc' ? (
+                    <div className="details-body">
+                      <div className="sine-osc-options">
+                        <label className="sine-osc-quantize">
+                          <input
+                            type="checkbox"
+                            checked={selNode.quantize || false}
+                            onChange={(e) =>
+                              handleQuantizeToggle(selNode.id, e.target.checked)
+                            }
+                          />
+                          <span className="sine-osc-quantize-label">
+                            Quantize frequency to nearest note
+                          </span>
+                        </label>
+                        {selNode.quantize && (
+                          <div className="sine-osc-quantize-info">
+                            {freqToNoteName(selNode.params.freq ?? 440)}
+                            {' · '}
+                            {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
