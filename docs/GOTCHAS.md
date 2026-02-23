@@ -153,4 +153,38 @@ setTimeout(() => {
 
 ---
 
+## 7. Audio-Rate Modulation Requires Correct Node Ordering
+
+**Symptom:** Connecting one Sine Osc to another's frequency input for FM synthesis produces no modulation effect, or produces clicks/glitches.
+
+**Root cause:** In scsynth, nodes within a group execute in order from head to tail. For FM synthesis to work, the modulator must write its output to an audio bus **before** the carrier reads from it in the same audio cycle. If the carrier executes first, it reads stale or zero-filled buffer data.
+
+When using `addAction=0` (addToHead) with `/s_new`, each new synth is inserted at the head of the group. If you create the modulator first, then the carrier, the carrier ends up at the head and executes first — the wrong order.
+
+**Fix:** Create synths in reverse dependency order: carriers first, then modulators. This way modulators end up at the head and execute before their carriers.
+
+```javascript
+// Sort sources: carriers first (toward tail), modulators last (toward head)
+const sources = [...sourceCarriers, ...sourceModulators];
+
+for (const id of sources) {
+  engine.play(id, synthDef, params);  // uses addToHead
+}
+// Result: modulators at head, carriers at tail → correct execution order
+```
+
+Additionally, use `/n_mapa` (not `/n_map`) to map parameters to audio buses:
+
+```javascript
+// Map synth param to read from audio bus (audio-rate)
+sonic.send('/n_mapa', nodeId, 'freq_mod', audioBusIndex);
+
+// vs. control bus mapping (control-rate)
+sonic.send('/n_map', nodeId, 'freq', controlBusIndex);
+```
+
+**Reference:** `src/GridView.jsx:640-660` (source ordering), `src/audio/gridEngine.js:207-212` (`mapParamToAudioBus`), `synthdefs/src/sine.scd` (audio-rate mod inputs)
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

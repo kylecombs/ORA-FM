@@ -371,6 +371,13 @@
   border-color: var(--accent);
 }
 
+/* Audio-rate modulation port (FM/AM/PM) */
+.node-port.mod-input.audio-rate {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
 .port-label {
   position: absolute;
   font-size: 0.45rem;
@@ -460,6 +467,27 @@
 .node-param.modulated .param-val {
   color: var(--accent);
   font-style: italic;
+}
+
+/* Audio-rate modulated param (FM/AM/PM) */
+.node-param.audio-rate-mod {
+  opacity: 0.85;
+}
+
+.node-param.audio-rate-mod input[type='range'] {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.node-param.audio-rate-mod .param-label {
+  color: var(--accent);
+}
+
+.node-param.audio-rate-mod .param-val {
+  color: var(--accent);
+  font-weight: 500;
+  font-style: normal;
+  letter-spacing: 0.05em;
 }
 
 /* ── Live dot indicator ────────────────────── */
@@ -1453,4 +1481,216 @@
   letter-spacing: 0.02em;
   min-width: 30px;
   text-align: right;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PRINT CONSOLE PANEL
+   ═══════════════════════════════════════════════════════════ */
+
+.print-console-panel {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100%);
+  width: min(700px, calc(100% - 40px));
+  max-height: 250px;
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  border-radius: 10px 10px 0 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.print-console-panel.open {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.print-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border, #252320);
+  flex-shrink: 0;
+}
+
+.print-console-title {
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim, #7a7570);
+}
+
+.print-console-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.print-console-clear {
+  background: none;
+  border: none;
+  color: var(--dim, #7a7570);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.5rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.print-console-clear:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink, #d4cfc8);
+}
+
+.print-console-close {
+  background: none;
+  border: none;
+  color: var(--dim, #7a7570);
+  font-size: 1rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color 0.15s ease;
+}
+
+.print-console-close:hover {
+  color: var(--ink, #d4cfc8);
+}
+
+.print-console-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.55rem;
+  line-height: 1.6;
+}
+
+.print-console-line {
+  display: flex;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background 0.1s ease;
+}
+
+.print-console-line:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.print-console-time {
+  color: var(--dim, #7a7570);
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.print-console-prefix {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.print-console-value {
+  color: var(--ink, #d4cfc8);
+  font-variant-numeric: tabular-nums;
+}
+
+.print-console-empty {
+  color: var(--dim, #7a7570);
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PRINT MODULE DETAILS
+   ═══════════════════════════════════════════════════════════ */
+
+.print-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.print-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.print-label {
+  font-size: 0.55rem;
+  color: var(--dim, #7a7570);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  min-width: 50px;
+}
+
+.print-prefix-input {
+  flex: 1;
+  background: var(--deep, #0c0b0a);
+  border: 1px solid var(--border, #252320);
+  border-radius: 4px;
+  color: var(--ink, #d4cfc8);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  padding: 6px 8px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.print-prefix-input:focus {
+  border-color: rgba(224, 112, 80, 0.5);
+}
+
+.print-color-input {
+  width: 32px;
+  height: 24px;
+  border: 1px solid var(--border, #252320);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  padding: 0;
+}
+
+.print-color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.print-color-input::-webkit-color-swatch {
+  border-radius: 2px;
+  border: none;
+}
+
+.print-color-preview {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  font-weight: 500;
+}
+
+.print-hint {
+  font-size: 0.5rem;
+  color: var(--dim, #7a7570);
+  opacity: 0.7;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+/* Console toggle button */
+.toolbar-btn.console-toggle {
+  border-color: rgba(224, 112, 80, 0.3);
+  color: #e07050;
+}
+
+.toolbar-btn.console-toggle.active {
+  background: rgba(224, 112, 80, 0.1);
+  border-color: rgba(224, 112, 80, 0.5);
 }
