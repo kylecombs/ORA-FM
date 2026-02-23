@@ -8,8 +8,8 @@
 //  can be set at runtime via /n_set OSC messages. Unused
 //  segments should have t=0 (zero duration, instantly skipped).
 //
-//  Compile with desktop SuperCollider:
-//    thisProcess.interpreter.executeFile("<path>/breakpoint-env.scd");
+//  Build (headless):   ./synthdefs/build.sh
+//  Build (IDE):        thisProcess.interpreter.executeFile("<path>/breakpoint-env.scd");
 //
 //  Parameters:
 //    l0..l15   breakpoint levels (typically 0.0 – 1.0)
@@ -20,7 +20,8 @@
 //    gate      hold gate (1=run, 0=release — not currently used)
 // ════════════════════════════════════════════════════════════
 (
-var outDir = thisProcess.platform.recordingsDir +/+ "ora-fm-synthdefs";
+// ~outDir is injected by build.sh; fall back to recordings dir for IDE use
+var outDir = ~outDir ?? (thisProcess.platform.recordingsDir +/+ "ora-fm-synthdefs");
 outDir.mkdir;
 
 SynthDef(\breakpoint_env, {
