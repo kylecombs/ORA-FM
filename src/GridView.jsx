@@ -44,6 +44,13 @@ const oraTheme = createTheme({
   ],
 });
 
+// ── Frequency quantisation (12-TET, A4 = 440 Hz) ─────────
+function quantizeFreq(hz) {
+  if (hz <= 0) return hz;
+  const semitone = 12 * Math.log2(hz / 440);
+  return 440 * Math.pow(2, Math.round(semitone) / 12);
+}
+
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
   sine: {
@@ -675,11 +682,11 @@ export default function GridView() {
       const pan = routing.pan ?? 0;
 
       if (!engine.isPlaying(id)) {
-        engine.play(id, schema.synthDef, {
-          ...node.params,
-          pan,
-          out_bus: routing.outBus,
-        });
+        const playParams = { ...node.params, pan, out_bus: routing.outBus };
+        if (node.quantize && playParams.freq != null) {
+          playParams.freq = quantizeFreq(playParams.freq);
+        }
+        engine.play(id, schema.synthDef, playParams);
       } else {
         engine.setParam(id, 'pan', pan);
         engine.setParam(id, 'out_bus', routing.outBus);
@@ -860,14 +867,19 @@ export default function GridView() {
 
   // ── Param change ──────────────────────────────────────
   const handleParamChange = useCallback((nodeId, param, value) => {
-    setNodes((prev) => ({
-      ...prev,
-      [nodeId]: {
-        ...prev[nodeId],
-        params: { ...prev[nodeId].params, [param]: value },
-      },
-    }));
-    engineRef.current?.setParam(nodeId, param, value);
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      // Quantize freq to nearest note when the flag is on
+      const sent = (param === 'freq' && node?.quantize) ? quantizeFreq(value) : value;
+      engineRef.current?.setParam(nodeId, param, sent);
+      return {
+        ...prev,
+        [nodeId]: {
+          ...node,
+          params: { ...node.params, [param]: value },
+        },
+      };
+    });
   }, []);
 
   // ── Script code change ──────────────────────────────────
@@ -896,6 +908,20 @@ export default function GridView() {
       const next = new Set(prev);
       next.delete(nodeId);
       return next;
+    });
+  }, []);
+
+  // ── Quantize toggle ──────────────────────────────────
+  const handleQuantizeToggle = useCallback((nodeId, enabled) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      const updated = { ...node, quantize: enabled };
+      // Re-send freq immediately with (or without) quantisation
+      if (node.params.freq != null) {
+        const sent = enabled ? quantizeFreq(node.params.freq) : node.params.freq;
+        engineRef.current?.setParam(nodeId, 'freq', sent);
+      }
+      return { ...prev, [nodeId]: updated };
     });
   }, []);
 
@@ -1764,6 +1790,28 @@ export default function GridView() {
                             </div>
                           )}
                         </div>
+                      </div>
+                    </div>
+                  ) : selNode.type === 'sine_osc' ? (
+                    <div className="details-body">
+                      <div className="sine-osc-options">
+                        <label className="sine-osc-quantize">
+                          <input
+                            type="checkbox"
+                            checked={selNode.quantize || false}
+                            onChange={(e) =>
+                              handleQuantizeToggle(selNode.id, e.target.checked)
+                            }
+                          />
+                          <span className="sine-osc-quantize-label">
+                            Quantize frequency to nearest note
+                          </span>
+                        </label>
+                        {selNode.quantize && (
+                          <div className="sine-osc-quantize-info">
+                            {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (

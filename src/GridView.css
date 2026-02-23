@@ -954,6 +954,39 @@
   opacity: 0.6;
 }
 
+/* ── Sine Osc details options ──────────────────── */
+.sine-osc-options {
+  padding: 1rem;
+}
+
+.sine-osc-quantize {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.55rem;
+  color: var(--dim, #7a7570);
+  cursor: pointer;
+}
+
+.sine-osc-quantize input[type='checkbox'] {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent, #c8b060);
+  cursor: pointer;
+}
+
+.sine-osc-quantize-label {
+  letter-spacing: 0.04em;
+}
+
+.sine-osc-quantize-info {
+  margin-top: 6px;
+  font-size: 0.55rem;
+  color: var(--accent, #c8b060);
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
 /* ── Script editor section ───────────────────── */
 .script-editor-section {
   flex: 1;
