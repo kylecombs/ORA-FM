@@ -1381,6 +1381,35 @@
   opacity: 0.7;
 }
 
+/* ── Trigger input port ────────────────────────── */
+.sense-node.envelope .trig-port {
+  width: 10px;
+  height: 10px;
+  left: -5px;
+  border-width: 1.5px;
+  border-color: var(--accent, #c8b060);
+  opacity: 0.6;
+  transition: all 0.15s ease;
+}
+
+.sense-node.envelope .trig-port:hover {
+  opacity: 1;
+  transform: rotate(45deg) scale(1.3);
+}
+
+.sense-node.envelope .trig-port.modulated {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 50%, var(--lift, #1a1917));
+  border-color: var(--accent);
+}
+
+.sense-node.envelope .trig-port .port-label-in {
+  left: 14px;
+  font-size: 0.42rem;
+  color: var(--accent, #c8b060);
+  opacity: 0.5;
+}
+
 /* ── Output value readout ─────────────────────── */
 .env-out-val {
   margin-left: auto;
