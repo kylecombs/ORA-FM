@@ -19,9 +19,19 @@ OUT_DIR="$REPO_ROOT/public/supersonic/synthdefs"
 
 # ── Preflight ────────────────────────────────────────────
 if ! command -v sclang &>/dev/null; then
-  echo "ERROR: sclang not found on PATH."
-  echo "Install SuperCollider: https://supercollider.github.io/downloads"
-  exit 1
+  echo "WARNING: sclang not found on PATH."
+  echo "  Falling back to Node.js binary generator for filter synthdefs."
+  echo "  For full .scd → .scsyndef compilation, install SuperCollider:"
+  echo "  https://supercollider.github.io/downloads"
+  echo ""
+  GENERATOR="$REPO_ROOT/synthdefs/generate-filter-synthdefs.cjs"
+  if [[ -f "$GENERATOR" ]]; then
+    node "$GENERATOR"
+    exit $?
+  else
+    echo "ERROR: No sclang and no fallback generator found at $GENERATOR"
+    exit 1
+  fi
 fi
 
 mkdir -p "$OUT_DIR"
