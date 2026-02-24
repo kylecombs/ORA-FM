@@ -338,6 +338,18 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 127, step: 0.01, val: 60 },
     },
   },
+  bang: {
+    label: 'Bang',
+    desc: 'trigger button',
+    accent: '#e07050',
+    synthDef: null,
+    category: 'control',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'val', min: 0, max: 1, step: 1, val: 0, hidden: true },
+    },
+  },
   envelope: {
     label: 'Envelope',
     desc: 'breakpoint editor',
@@ -411,7 +423,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant', 'envelope'],
+    types: ['constant', 'envelope', 'bang'],
   },
 ];
 
@@ -422,10 +434,19 @@ const PORT_SECTION_Y = HEADER_H + 2;
 const PORT_SPACING = 22;
 
 function getNodeWidth(node) {
+  if (node.type === 'bang') return (node.bangSize || 60) + 16;
   return NODE_SCHEMA[node.type]?.width || NODE_W;
 }
 
 function getPortPos(node, portType, portIndex) {
+  if (node.type === 'bang') {
+    const size = node.bangSize || 60;
+    const centerY = node.y + HEADER_H + 4 + size / 2;
+    if (portType === 'output') {
+      return { x: node.x + size + 16, y: centerY };
+    }
+    return { x: node.x, y: centerY };
+  }
   const y = node.y + PORT_SECTION_Y + 11 + portIndex * PORT_SPACING;
   if (portType === 'output') {
     return { x: node.x + getNodeWidth(node), y };
@@ -1061,6 +1082,9 @@ export default function GridView() {
       node.duration = 2;
       node.loop = false;
     }
+    if (type === 'bang') {
+      node.bangSize = 60;
+    }
     if (type === 'print') {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
@@ -1249,6 +1273,67 @@ export default function GridView() {
     return envelopeRunnerRef.current?.getProgress(nodeId) || null;
   }, []);
 
+  // ── Bang handler ─────────────────────────────────────────
+  const bangTimeouts = useRef({}); // nodeId → timeout handle
+  const handleBang = useCallback((nodeId) => {
+    // Clear any pending reset so rapid clicks retrigger cleanly
+    if (bangTimeouts.current[nodeId]) {
+      clearTimeout(bangTimeouts.current[nodeId]);
+      // Reset to 0 first so the rising-edge detector sees a fresh edge
+      setNodes((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 0 } },
+      }));
+    }
+    // Pulse value to 1
+    // Use a microtask so the 0→1 transition happens in a separate render
+    // when retriggering (ensures the rising-edge detector sees it)
+    Promise.resolve().then(() => {
+      setNodes((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 1 } },
+      }));
+      // Reset back to 0 after a short delay
+      bangTimeouts.current[nodeId] = setTimeout(() => {
+        setNodes((prev) => ({
+          ...prev,
+          [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 0 } },
+        }));
+        delete bangTimeouts.current[nodeId];
+      }, 80);
+    });
+  }, []);
+
+  // ── Bang resize (drag from edge) ───────────────────────
+  const bangResizing = useRef(null); // { nodeId, startY, startSize }
+  const handleBangResizeStart = useCallback((e, nodeId, currentSize) => {
+    e.stopPropagation();
+    e.preventDefault();
+    bangResizing.current = {
+      nodeId,
+      startY: e.clientY,
+      startSize: currentSize,
+    };
+
+    const onMove = (me) => {
+      const info = bangResizing.current;
+      if (!info) return;
+      const delta = me.clientY - info.startY;
+      const newSize = Math.max(36, Math.min(200, info.startSize + delta));
+      setNodes((prev) => ({
+        ...prev,
+        [info.nodeId]: { ...prev[info.nodeId], bangSize: newSize },
+      }));
+    };
+    const onUp = () => {
+      bangResizing.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
   // ── Save patch to JSON file ─────────────────────────────
   const handleSavePatch = useCallback(() => {
     const patch = {
@@ -1273,6 +1358,7 @@ export default function GridView() {
         if (node.loop) entry.loop = true;
         if (node.printPrefix != null) entry.printPrefix = node.printPrefix;
         if (node.printColor != null) entry.printColor = node.printColor;
+        if (node.bangSize != null) entry.bangSize = node.bangSize;
         return entry;
       }),
       connections: connections.map((c) => {
@@ -1356,6 +1442,7 @@ export default function GridView() {
           if (n.loop) restoredNodes[n.id].loop = true;
           if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
           if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
+          if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
         }
 
         // Restore connections
@@ -1496,7 +1583,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1733,6 +1820,7 @@ export default function GridView() {
     const isControl = schema.category === 'control';
     const isScript = schema.category === 'script';
     const isEnvelope = node.type === 'envelope';
+    const isBang = node.type === 'bang';
     const nodeWidth = schema.width || NODE_W;
 
     // Check if this module has any modulation output connections
@@ -1765,11 +1853,11 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
-          width: nodeWidth,
+          width: isBang ? (node.bangSize || 60) + 16 : nodeWidth,
           '--accent': schema.accent,
         }}
         onMouseDown={(e) => startDrag(e, node.id)}
@@ -1792,7 +1880,9 @@ export default function GridView() {
           <div
             key={`out-${i}`}
             className="node-port output"
-            style={{ top: PORT_SECTION_Y + 11 + i * PORT_SPACING - 6 }}
+            style={{ top: isBang
+              ? HEADER_H + 4 + (node.bangSize || 60) / 2 - 4
+              : PORT_SECTION_Y + 11 + i * PORT_SPACING - 6 }}
             onClick={(e) => handlePortClick(e, node.id, 'output', i)}
             title={name}
           >
@@ -1844,6 +1934,29 @@ export default function GridView() {
             </button>
           )}
         </div>
+
+        {/* Bang button */}
+        {isBang && (() => {
+          const size = node.bangSize || 60;
+          const fired = (node.params.value ?? 0) >= 0.5;
+          return (
+            <div className="bang-body" style={{ padding: '4px 0' }}>
+              <div
+                className={`bang-circle${fired ? ' fired' : ''}`}
+                style={{ width: size, height: size }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleBang(node.id);
+                }}
+              />
+              <div
+                className="bang-resize-handle"
+                onMouseDown={(e) => handleBangResizeStart(e, node.id, size)}
+                title="Drag to resize"
+              />
+            </div>
+          );
+        })()}
 
         {/* Envelope editor */}
         {isEnvelope && (
@@ -1902,7 +2015,7 @@ export default function GridView() {
         )}
 
         {/* Parameters (skip hidden params, skip for envelope) */}
-        {!isEnvelope && Object.keys(schema.params).length > 0 && (
+        {!isEnvelope && !isBang && Object.keys(schema.params).length > 0 && (
           <div className="node-params">
             {Object.entries(schema.params).map(([key, def]) => {
               if (def.hidden) return null;

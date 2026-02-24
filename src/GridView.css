@@ -1715,3 +1715,71 @@
   border-color: rgba(122, 171, 136, 0.5);
   background: rgba(122, 171, 136, 0.08);
 }
+
+/* ── Bang module ───────────────────────── */
+.sense-node.bang {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border, #252320));
+  overflow: visible;
+}
+
+.sense-node.bang::before {
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--accent) 0px,
+    var(--accent) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
+.bang-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.bang-circle {
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 38%,
+    color-mix(in srgb, var(--accent) 30%, #1a1917) 0%,
+    color-mix(in srgb, var(--accent) 12%, #0c0b0a) 100%
+  );
+  border: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  cursor: pointer;
+  transition: transform 0.06s ease-out, border-color 0.06s, background 0.06s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.bang-circle:hover {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.bang-circle:active,
+.bang-circle.fired {
+  transform: scale(0.92);
+  background: radial-gradient(
+    circle at 38% 38%,
+    var(--accent) 0%,
+    color-mix(in srgb, var(--accent) 50%, #0c0b0a) 100%
+  );
+  border-color: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.bang-resize-handle {
+  width: 20px;
+  height: 6px;
+  margin-top: 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  cursor: ns-resize;
+  transition: background 0.15s;
+}
+
+.bang-resize-handle:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
