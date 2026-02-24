@@ -32,8 +32,9 @@ outDir.mkdir;
 
 SynthDef(\sine, {
     // Base parameters (control-rate, set via sliders or /n_set)
+    // Lag amp (5 ms) to prevent clicks from abrupt control-rate changes
     var freq  = \freq.kr(440);
-    var amp   = \amp.kr(0.5);
+    var amp   = Lag.kr(\amp.kr(0.5), 0.005);
     var phase = \phase.kr(0);
 
     // Audio-rate modulation inputs (mapped via /n_mapa from audio buses)
