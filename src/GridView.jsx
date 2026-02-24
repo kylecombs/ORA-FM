@@ -1375,7 +1375,7 @@ export default function GridView() {
       node.printColor = '#e07050';
     }
     if (type === 'scope') {
-      node.scopeMode = 'classic'; // 'classic' (phosphor CRT) or 'modern' (clean utility)
+      node.scopeMode = 'modern'; // 'modern' (clean utility) or 'classic' (phosphor CRT)
     }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
@@ -2158,7 +2158,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'classic'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2328,15 +2328,15 @@ export default function GridView() {
               nodeId={node.id}
               bufferSize={SCOPE_BUFFER_SIZE}
               accentColor={schema.accent}
-              mode={node.scopeMode || 'classic'}
+              mode={node.scopeMode || 'modern'}
             />
             <div className="scope-controls">
               <button
                 className="scope-mode-btn"
                 onClick={(e) => { e.stopPropagation(); handleScopeModeToggle(node.id); }}
-                title={`Switch to ${(node.scopeMode || 'classic') === 'classic' ? 'modern' : 'classic'} mode`}
+                title={`Switch to ${(node.scopeMode || 'modern') === 'classic' ? 'modern' : 'classic'} mode`}
               >
-                {(node.scopeMode || 'classic') === 'classic' ? 'CRT' : 'clean'}
+                {(node.scopeMode || 'modern') === 'classic' ? 'CRT' : 'clean'}
               </button>
             </div>
           </>
@@ -2777,7 +2777,7 @@ export default function GridView() {
                           <span className="scope-mode-label">Display mode</span>
                           <div className="scope-mode-toggle-group">
                             <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'classic') === 'classic' ? ' active' : ''}`}
+                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'classic' ? ' active' : ''}`}
                               onClick={() => setNodes((prev) => ({
                                 ...prev,
                                 [selNode.id]: { ...prev[selNode.id], scopeMode: 'classic' },
@@ -2786,7 +2786,7 @@ export default function GridView() {
                               Classic
                             </button>
                             <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'classic') === 'modern' ? ' active' : ''}`}
+                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'modern' ? ' active' : ''}`}
                               onClick={() => setNodes((prev) => ({
                                 ...prev,
                                 [selNode.id]: { ...prev[selNode.id], scopeMode: 'modern' },
@@ -2797,7 +2797,7 @@ export default function GridView() {
                           </div>
                         </div>
                         <div className="scope-mode-desc">
-                          {(selNode.scopeMode || 'classic') === 'classic'
+                          {(selNode.scopeMode || 'modern') === 'classic'
                             ? 'CRT phosphor glow with persistence trail and graticule grid.'
                             : 'Clean utility trace with filled area, matching the app aesthetic.'}
                         </div>
