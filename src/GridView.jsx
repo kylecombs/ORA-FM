@@ -338,6 +338,18 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 127, step: 0.01, val: 60 },
     },
   },
+  bang: {
+    label: 'Bang',
+    desc: 'trigger button',
+    accent: '#e07050',
+    synthDef: null,
+    category: 'control',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'val', min: 0, max: 1, step: 1, val: 0, hidden: true },
+    },
+  },
   envelope: {
     label: 'Envelope',
     desc: 'breakpoint editor',
@@ -411,7 +423,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant', 'envelope'],
+    types: ['constant', 'envelope', 'bang'],
   },
 ];
 
@@ -422,10 +434,19 @@ const PORT_SECTION_Y = HEADER_H + 2;
 const PORT_SPACING = 22;
 
 function getNodeWidth(node) {
+  if (node.type === 'bang') return (node.bangSize || 60) + 16;
   return NODE_SCHEMA[node.type]?.width || NODE_W;
 }
 
 function getPortPos(node, portType, portIndex) {
+  if (node.type === 'bang') {
+    const size = node.bangSize || 60;
+    const centerY = node.y + HEADER_H + 4 + size / 2;
+    if (portType === 'output') {
+      return { x: node.x + size + 16, y: centerY };
+    }
+    return { x: node.x, y: centerY };
+  }
   const y = node.y + PORT_SECTION_Y + 11 + portIndex * PORT_SPACING;
   if (portType === 'output') {
     return { x: node.x + getNodeWidth(node), y };
@@ -534,6 +555,7 @@ export default function GridView() {
   const nodesRef = useRef(nodes); // Ref to access current nodes in callbacks
   nodesRef.current = nodes;
   const printConsoleRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Auto-scroll print console when new logs arrive
   useEffect(() => {
@@ -1060,6 +1082,9 @@ export default function GridView() {
       node.duration = 2;
       node.loop = false;
     }
+    if (type === 'bang') {
+      node.bangSize = 60;
+    }
     if (type === 'print') {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
@@ -1248,6 +1273,206 @@ export default function GridView() {
     return envelopeRunnerRef.current?.getProgress(nodeId) || null;
   }, []);
 
+  // ── Bang handler ─────────────────────────────────────────
+  const bangTimeouts = useRef({}); // nodeId → timeout handle
+  const handleBang = useCallback((nodeId) => {
+    // Clear any pending reset so rapid clicks retrigger cleanly
+    if (bangTimeouts.current[nodeId]) {
+      clearTimeout(bangTimeouts.current[nodeId]);
+      // Reset to 0 first so the rising-edge detector sees a fresh edge
+      setNodes((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 0 } },
+      }));
+    }
+    // Pulse value to 1
+    // Use a microtask so the 0→1 transition happens in a separate render
+    // when retriggering (ensures the rising-edge detector sees it)
+    Promise.resolve().then(() => {
+      setNodes((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 1 } },
+      }));
+      // Reset back to 0 after a short delay
+      bangTimeouts.current[nodeId] = setTimeout(() => {
+        setNodes((prev) => ({
+          ...prev,
+          [nodeId]: { ...prev[nodeId], params: { ...prev[nodeId].params, value: 0 } },
+        }));
+        delete bangTimeouts.current[nodeId];
+      }, 80);
+    });
+  }, []);
+
+  // ── Bang resize (drag from edge) ───────────────────────
+  const bangResizing = useRef(null); // { nodeId, startY, startSize }
+  const handleBangResizeStart = useCallback((e, nodeId, currentSize) => {
+    e.stopPropagation();
+    e.preventDefault();
+    bangResizing.current = {
+      nodeId,
+      startY: e.clientY,
+      startSize: currentSize,
+    };
+
+    const onMove = (me) => {
+      const info = bangResizing.current;
+      if (!info) return;
+      const delta = me.clientY - info.startY;
+      const newSize = Math.max(36, Math.min(200, info.startSize + delta));
+      setNodes((prev) => ({
+        ...prev,
+        [info.nodeId]: { ...prev[info.nodeId], bangSize: newSize },
+      }));
+    };
+    const onUp = () => {
+      bangResizing.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  // ── Save patch to JSON file ─────────────────────────────
+  const handleSavePatch = useCallback(() => {
+    const patch = {
+      name: 'Untitled Patch',
+      version: 1,
+      createdAt: new Date().toISOString(),
+      nextId: nextId.current,
+      connId: connId.current,
+      nodes: Object.values(nodes).map((node) => {
+        const entry = {
+          id: node.id,
+          type: node.type,
+          x: Math.round(node.x),
+          y: Math.round(node.y),
+          params: { ...node.params },
+        };
+        if (node.code != null) entry.code = node.code;
+        if (node.quantize) entry.quantize = true;
+        if (node.breakpoints) entry.breakpoints = node.breakpoints;
+        if (node.curves) entry.curves = node.curves;
+        if (node.duration != null) entry.duration = node.duration;
+        if (node.loop) entry.loop = true;
+        if (node.printPrefix != null) entry.printPrefix = node.printPrefix;
+        if (node.printColor != null) entry.printColor = node.printColor;
+        if (node.bangSize != null) entry.bangSize = node.bangSize;
+        return entry;
+      }),
+      connections: connections.map((c) => {
+        const entry = {
+          id: c.id,
+          from: c.fromNodeId,
+          fromPort: c.fromPortIndex,
+          to: c.toNodeId,
+          toPort: c.toPortIndex,
+        };
+        if (c.toParam) entry.toParam = c.toParam;
+        if (c.isAudioRate) entry.isAudioRate = true;
+        return entry;
+      }),
+    };
+
+    const json = JSON.stringify(patch, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${patch.name.replace(/\s+/g, '-').toLowerCase()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('Patch saved');
+  }, [nodes, connections]);
+
+  // ── Load patch from JSON file ───────────────────────────
+  const handleLoadPatch = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelect = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const patch = JSON.parse(ev.target.result);
+
+        // Validate basic structure
+        if (!patch.nodes || !patch.connections) {
+          setStatus('Error: Invalid patch file — missing nodes or connections');
+          return;
+        }
+
+        // Stop all running audio, scripts, envelopes
+        const engine = engineRef.current;
+        if (engine) {
+          for (const id of Object.keys(nodes)) {
+            engine.stop(Number(id));
+          }
+        }
+        scriptRunnerRef.current?.stopAll?.();
+        envelopeRunnerRef.current?.stopAll?.();
+        setRunningScripts(new Set());
+        setRunningEnvelopes(new Set());
+        setPrintLogs([]);
+        setSelectedNodeId(null);
+
+        // Restore nodes
+        const restoredNodes = {};
+        for (const n of patch.nodes) {
+          if (!NODE_SCHEMA[n.type]) {
+            setStatus(`Warning: Unknown node type "${n.type}" — skipped`);
+            continue;
+          }
+          restoredNodes[n.id] = {
+            id: n.id,
+            type: n.type,
+            x: n.x ?? 0,
+            y: n.y ?? 0,
+            params: { ...n.params },
+          };
+          if (n.code != null) restoredNodes[n.id].code = n.code;
+          if (n.quantize) restoredNodes[n.id].quantize = true;
+          if (n.breakpoints) restoredNodes[n.id].breakpoints = n.breakpoints;
+          if (n.curves) restoredNodes[n.id].curves = n.curves;
+          if (n.duration != null) restoredNodes[n.id].duration = n.duration;
+          if (n.loop) restoredNodes[n.id].loop = true;
+          if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
+          if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
+          if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
+        }
+
+        // Restore connections
+        const restoredConns = patch.connections.map((c) => ({
+          id: c.id,
+          fromNodeId: c.from,
+          fromPortIndex: c.fromPort,
+          toNodeId: c.to,
+          toPortIndex: c.toPort,
+          toParam: c.toParam || null,
+          isAudioRate: c.isAudioRate || false,
+        }));
+
+        // Restore ID counters
+        if (patch.nextId) nextId.current = patch.nextId;
+        if (patch.connId) connId.current = patch.connId;
+
+        setNodes(restoredNodes);
+        setConnections(restoredConns);
+        setStatus(`Loaded: ${patch.name || 'patch'}`);
+      } catch (err) {
+        setStatus(`Error loading patch: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+
+    // Reset input so the same file can be loaded again
+    e.target.value = '';
+  }, [nodes]);
+
   // ── External trigger detection (rising-edge on modulated trig param) ──
   const prevTrigVals = useRef({}); // nodeId → previous trigger source value
 
@@ -1358,7 +1583,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1595,6 +1820,7 @@ export default function GridView() {
     const isControl = schema.category === 'control';
     const isScript = schema.category === 'script';
     const isEnvelope = node.type === 'envelope';
+    const isBang = node.type === 'bang';
     const nodeWidth = schema.width || NODE_W;
 
     // Check if this module has any modulation output connections
@@ -1627,11 +1853,11 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
-          width: nodeWidth,
+          width: isBang ? (node.bangSize || 60) + 16 : nodeWidth,
           '--accent': schema.accent,
         }}
         onMouseDown={(e) => startDrag(e, node.id)}
@@ -1654,7 +1880,9 @@ export default function GridView() {
           <div
             key={`out-${i}`}
             className="node-port output"
-            style={{ top: PORT_SECTION_Y + 11 + i * PORT_SPACING - 6 }}
+            style={{ top: isBang
+              ? HEADER_H + 4 + (node.bangSize || 60) / 2 - 4
+              : PORT_SECTION_Y + 11 + i * PORT_SPACING - 6 }}
             onClick={(e) => handlePortClick(e, node.id, 'output', i)}
             title={name}
           >
@@ -1706,6 +1934,29 @@ export default function GridView() {
             </button>
           )}
         </div>
+
+        {/* Bang button */}
+        {isBang && (() => {
+          const size = node.bangSize || 60;
+          const fired = (node.params.value ?? 0) >= 0.5;
+          return (
+            <div className="bang-body" style={{ padding: '4px 0' }}>
+              <div
+                className={`bang-circle${fired ? ' fired' : ''}`}
+                style={{ width: size, height: size }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleBang(node.id);
+                }}
+              />
+              <div
+                className="bang-resize-handle"
+                onMouseDown={(e) => handleBangResizeStart(e, node.id, size)}
+                title="Drag to resize"
+              />
+            </div>
+          );
+        })()}
 
         {/* Envelope editor */}
         {isEnvelope && (
@@ -1764,7 +2015,7 @@ export default function GridView() {
         )}
 
         {/* Parameters (skip hidden params, skip for envelope) */}
-        {!isEnvelope && Object.keys(schema.params).length > 0 && (
+        {!isEnvelope && !isBang && Object.keys(schema.params).length > 0 && (
           <div className="node-params">
             {Object.entries(schema.params).map(([key, def]) => {
               if (def.hidden) return null;
@@ -1869,6 +2120,34 @@ export default function GridView() {
           >
             {consoleOpen ? '— Hide Console' : '> Console'}
           </button>
+
+          <div className="toolbar-divider" />
+
+          <button
+            className="toolbar-btn save-btn"
+            onClick={handleSavePatch}
+            disabled={!booted}
+            title="Save patch to JSON file"
+          >
+            Save
+          </button>
+
+          <button
+            className="toolbar-btn load-btn"
+            onClick={handleLoadPatch}
+            disabled={!booted}
+            title="Load patch from JSON file"
+          >
+            Load
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
         </div>
 
         {/* Canvas */}

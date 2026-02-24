@@ -1,0 +1,84 @@
+{
+  "name": "FM Wood Block",
+  "version": 1,
+  "createdAt": "2026-02-24T00:00:00.000Z",
+  "nextId": 9,
+  "connId": 8,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "audioOut",
+      "x": 740,
+      "y": 100,
+      "params": {}
+    },
+    {
+      "id": 2,
+      "type": "sine_osc",
+      "x": 510,
+      "y": 80,
+      "params": { "freq": 800, "amp": 0.5, "phase": 0 }
+    },
+    {
+      "id": 3,
+      "type": "sine_osc",
+      "x": 40,
+      "y": 80,
+      "params": { "freq": 2768, "amp": 0.8, "phase": 0 }
+    },
+    {
+      "id": 4,
+      "type": "multiply",
+      "x": 280,
+      "y": 80,
+      "params": { "gain": 1500 }
+    },
+    {
+      "id": 5,
+      "type": "envelope",
+      "x": 420,
+      "y": 300,
+      "params": { "value": 0, "trig": 0 },
+      "breakpoints": [
+        { "time": 0, "value": 0 },
+        { "time": 0.01, "value": 1 },
+        { "time": 0.15, "value": 0.25 },
+        { "time": 1, "value": 0 }
+      ],
+      "curves": [0, -3, -2],
+      "duration": 0.3
+    },
+    {
+      "id": 6,
+      "type": "envelope",
+      "x": 40,
+      "y": 300,
+      "params": { "value": 0, "trig": 0 },
+      "breakpoints": [
+        { "time": 0, "value": 0 },
+        { "time": 0.005, "value": 1 },
+        { "time": 0.08, "value": 0.05 },
+        { "time": 1, "value": 0 }
+      ],
+      "curves": [0, -4, -2],
+      "duration": 0.15
+    },
+    {
+      "id": 8,
+      "type": "bang",
+      "x": 320,
+      "y": 510,
+      "params": { "value": 0 },
+      "bangSize": 80
+    }
+  ],
+  "connections": [
+    { "id": 1, "from": 3, "fromPort": 0, "to": 4, "toPort": 0 },
+    { "id": 2, "from": 4, "fromPort": 0, "to": 2, "toPort": -1, "toParam": "freq", "isAudioRate": true },
+    { "id": 3, "from": 2, "fromPort": 0, "to": 1, "toPort": 0 },
+    { "id": 4, "from": 5, "fromPort": 0, "to": 2, "toPort": -1, "toParam": "amp" },
+    { "id": 5, "from": 6, "fromPort": 0, "to": 3, "toPort": -1, "toParam": "amp" },
+    { "id": 6, "from": 8, "fromPort": 0, "to": 5, "toPort": -1, "toParam": "trig" },
+    { "id": 7, "from": 8, "fromPort": 0, "to": 6, "toPort": -1, "toParam": "trig" }
+  ]
+}
