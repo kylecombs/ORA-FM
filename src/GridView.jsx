@@ -761,7 +761,12 @@ export default function GridView() {
         );
         if (inConn && nodeRouting[inConn.fromNodeId]) {
           // Read from the same bus the source actually writes to
-          nodeRouting[id].inBus = nodeRouting[inConn.fromNodeId].effectiveOutBus;
+          const srcBus = nodeRouting[inConn.fromNodeId].effectiveOutBus;
+          const oldBus = nodeRouting[id].inBus;
+          nodeRouting[id].inBus = srcBus;
+          if (oldBus !== srcBus) {
+            console.log(`[BUS] print(${id}) inBus: ${oldBus} → ${srcBus} (from source ${inConn.fromNodeId})`);
+          }
         }
       }
     }
@@ -849,7 +854,7 @@ export default function GridView() {
         const prev = prevRouting[id];
         const cur = nodeRouting[id];
         if (!prev || prev.inBus !== cur.inBus || prev.outBus !== cur.outBus) {
-          engine.stop(id);
+  engine.stop(id);
         }
       }
     }
@@ -895,13 +900,20 @@ export default function GridView() {
           engine.playFx(id, schema.synthDef, {
             ...node.params,
             in_bus: routing.inBus,
-            out_bus: routing.outBus,
+            out_bus: routing.effectiveOutBus,  // Use effectiveOutBus for modulators
           });
         }
       } else {
-        // Update FX params (bus routing unchanged, just tweak params)
+        // Update FX params and routing
         for (const [k, v] of Object.entries(node.params)) {
           engine.setParam(id, k, v);
+        }
+        // Also update routing params dynamically (in_bus and out_bus can be changed via /n_set)
+        if (routing.inBus != null) {
+          engine.setParam(id, 'in_bus', routing.inBus);
+        }
+        if (routing.effectiveOutBus != null) {
+          engine.setParam(id, 'out_bus', routing.effectiveOutBus);  // Use effectiveOutBus for modulators
         }
       }
     }
