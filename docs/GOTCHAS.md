@@ -187,4 +187,36 @@ sonic.send('/n_map', nodeId, 'freq', controlBusIndex);
 
 ---
 
+## 8. Audio-Rate Modulation Produces Inaudible Results (Imperceptible FM/AM/PM)
+
+**Symptom:** Connecting one Sine Osc to modulate another's frequency (or amp / phase) produces no perceptible change in the carrier's sound. The output sounds like a plain unmodulated sine tone, even though the routing is correct and the modulator is playing.
+
+**Root cause:** Two compounding issues:
+
+1. **Amp range too small:** The modulator's `amp` parameter is capped at `[0, 1]` by the UI slider. In the SynthDef, the modulation signal is `SinOsc.ar(freq) * amp`, so maximum output oscillates between −1 and +1. When this signal reaches the carrier's `freq_mod` input, it adds at most ±1 Hz to the carrier frequency — completely imperceptible.
+
+2. **Pan2 stereo attenuation:** The modulator's output goes through `Pan2.ar(sig, pan)`. With the default `pan=0` (center), each stereo channel receives only ~70.7% of the original amplitude (`cos(π/4) ≈ 0.707`). Since `/n_mapa` maps to a single audio bus index (the left channel), the effective modulation amplitude is further reduced to ~±0.7 Hz.
+
+Combined, the maximum frequency deviation with default parameters is ≈±0.35 Hz (amp=0.5, Pan2 center). For comparison, audible FM synthesis typically requires ±100–1000 Hz deviation.
+
+**Fix:** Two changes in the routing sync (`GridView.jsx`):
+
+1. **Amp scaling:** When a source node is used as an audio-rate modulator, its `amp` parameter is multiplied by a per-target-parameter scale factor before being sent to scsynth. The UI slider stays in `[0, 1]` but the synth receives the scaled value:
+
+```javascript
+const MOD_DEPTH_SCALES = {
+  freq:  400,    // amp 0.5 → ±200 Hz frequency deviation
+  amp:   1,      // amp 0.5 → ±0.5 amplitude modulation
+  phase: 6.283,  // amp 0.5 → ±π radians phase modulation
+};
+```
+
+2. **Hard-left pan:** Modulators are panned to `pan=-1`, which puts the full signal into the left audio channel (the one `/n_mapa` reads). This eliminates the ~30% Pan2 equal-power attenuation.
+
+The same scaling is applied in `handleParamChange` (via `modAmpScaleRef`) so that slider changes are consistent with the routing sync.
+
+**Reference:** `src/GridView.jsx` — `MOD_DEPTH_SCALES` constant, routing sync steps 3 and 7, `handleParamChange`
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

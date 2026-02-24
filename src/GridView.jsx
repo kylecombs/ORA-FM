@@ -484,6 +484,17 @@ function getParamPortPos(node, schema, paramKey) {
   };
 }
 
+// ── Default scaling factors for audio-rate modulation depth ──
+// When a source oscillator modulates a target parameter, its output amplitude
+// (capped at 1.0 by the amp slider) is far too small for audible modulation.
+// These factors scale the modulator's amp so that the default slider value
+// (0.5) produces meaningful modulation depth for each parameter type.
+const MOD_DEPTH_SCALES = {
+  freq:  400,    // amp 0.5 → ±200 Hz frequency deviation (audible FM)
+  amp:   1,      // amp 0.5 → ±0.5 amplitude modulation (full-depth AM)
+  phase: 6.283,  // amp 0.5 → ±π radians phase modulation (full PM)
+};
+
 // ── Compute which nodes are "live" (reachable from AudioOut) ──
 function computeLiveNodes(nodes, connections) {
   const outNode = Object.values(nodes).find((n) => n.type === 'audioOut');
@@ -918,6 +929,7 @@ export default function GridView() {
   // ── Sync audio with live node set & bus routing ──────
   const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
   const prevModRef = useRef({});     // `${nodeId}:${param}` → { busIndex, isAudioRate }
+  const modAmpScaleRef = useRef({}); // nodeId → scale factor (for handleParamChange)
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -1100,6 +1112,11 @@ export default function GridView() {
       if (audioOutPort === 0) routing.pan = -0.8;
       else if (audioOutPort === 1) routing.pan = 0.8;
       else routing.pan = 0;
+
+      // Modulators use hard-left pan so the full signal goes to the left audio
+      // bus channel, which is what /n_mapa mod inputs read. This eliminates
+      // the ~30% amplitude loss from equal-power Pan2 at center.
+      if (routing.isModulator) routing.pan = -1;
     }
 
     // ── 4. Build topological play order (sources first, then FX in chain order) ──
@@ -1174,8 +1191,22 @@ export default function GridView() {
       const routing = nodeRouting[id];
       const pan = routing.pan ?? 0;
 
+      // For modulators, scale amp so the modulation signal is large enough to
+      // produce audible effects.  Without this, amp ∈ [0,1] gives at most
+      // ±1 Hz frequency deviation — completely imperceptible.
+      let ampToSend = node.params.amp;
+      if (routing.isModulator && routing.modOutBuses.length > 0) {
+        const targetParam = routing.modOutBuses[0].toParam;
+        const scale = MOD_DEPTH_SCALES[targetParam] ?? 1;
+        ampToSend = (node.params.amp ?? 0.5) * scale;
+        modAmpScaleRef.current[id] = scale;
+      } else {
+        delete modAmpScaleRef.current[id];
+      }
+
       if (!engine.isPlaying(id)) {
         const playParams = { ...node.params, pan, out_bus: routing.effectiveOutBus };
+        if (routing.isModulator) playParams.amp = ampToSend;
         if (node.quantize && playParams.freq != null) {
           playParams.freq = quantizeFreq(playParams.freq);
         }
@@ -1183,6 +1214,9 @@ export default function GridView() {
       } else {
         engine.setParam(id, 'pan', pan);
         engine.setParam(id, 'out_bus', routing.effectiveOutBus);
+        // Always sync amp: scaled for modulators, raw UI value for non-modulators
+        // (ensures amp reverts when a mod cable is disconnected).
+        engine.setParam(id, 'amp', ampToSend);
       }
     }
 
@@ -1425,7 +1459,13 @@ export default function GridView() {
       const node = prev[nodeId];
       // Quantize freq to nearest note when the flag is on
       const sent = (param === 'freq' && node?.quantize) ? quantizeFreq(value) : value;
-      engineRef.current?.setParam(nodeId, param, sent);
+      // For modulators, scale amp so the synth receives the modulation-depth
+      // value rather than the raw slider value (which is too small for audible
+      // FM/AM/PM).  The routing sync sets modAmpScaleRef for active modulators.
+      const actualSent = (param === 'amp' && modAmpScaleRef.current[nodeId])
+        ? sent * modAmpScaleRef.current[nodeId]
+        : sent;
+      engineRef.current?.setParam(nodeId, param, actualSent);
       return {
         ...prev,
         [nodeId]: {
