@@ -312,6 +312,17 @@ const NODE_SCHEMA = {
     outputs: [],
     params: {},
   },
+  scope: {
+    label: 'Scope',
+    desc: 'oscilloscope',
+    accent: '#6ab0b0',
+    synthDef: 'print',   // Reuses print synthdef (reads audio → control bus)
+    category: 'fx',      // Uses FX routing (reads from in_bus)
+    width: 220,
+    inputs: ['in'],
+    outputs: [],          // Sink node (like print)
+    params: {},
+  },
   // ── Script modules ───────────────────────────────────────
   script: {
     label: 'Script',
@@ -411,7 +422,7 @@ const MODULE_CATEGORIES = [
     id: 'utility',
     label: 'Utility',
     desc: 'signal tools',
-    types: ['multiply', 'print'],
+    types: ['multiply', 'print', 'scope'],
   },
   {
     id: 'scripting',
@@ -508,6 +519,106 @@ function panForPort(portIndex) {
   return portIndex === 0 ? -0.8 : 0.8;
 }
 
+// ── Oscilloscope canvas component ─────────────────────────
+function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor }) {
+  const canvasRef = useRef(null);
+  const animRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const draw = () => {
+      const w = canvas.width;
+      const h = canvas.height;
+      const buf = buffersRef.current.get(nodeId);
+
+      ctx.fillStyle = '#0c0b0a';
+      ctx.fillRect(0, 0, w, h);
+
+      // Center line
+      ctx.strokeStyle = 'rgba(122, 117, 112, 0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
+
+      if (!buf) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
+      const len = Math.min(writeIdx, bufferSize);
+
+      if (len < 2) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      // Compute min/max for auto-scaling
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < len; i++) {
+        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
+        const v = buf[idx];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      // Ensure a minimum range to avoid flat line for constant signals
+      const range = max - min;
+      if (range < 0.001) {
+        min -= 0.5;
+        max += 0.5;
+      }
+      const padding = (max - min) * 0.1 || 0.1;
+      const yMin = min - padding;
+      const yMax = max + padding;
+
+      // Draw waveform
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < len; i++) {
+        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
+        const v = buf[idx];
+        const x = (i / (bufferSize - 1)) * w;
+        const y = h - ((v - yMin) / (yMax - yMin)) * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Draw latest value text
+      const latest = buf[(writeIdx - 1 + bufferSize) % bufferSize];
+      ctx.fillStyle = 'rgba(212, 207, 200, 0.5)';
+      ctx.font = '9px "DM Mono", monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(latest.toFixed(3), w - 4, 11);
+
+      animRef.current = requestAnimationFrame(draw);
+    };
+
+    animRef.current = requestAnimationFrame(draw);
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+    };
+  }, [buffersRef, writeIdxRef, nodeId, bufferSize, accentColor]);
+
+  return (
+    <div className="scope-body">
+      <canvas
+        ref={canvasRef}
+        className="scope-canvas"
+        width={204}
+        height={80}
+      />
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 //  MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════
@@ -557,6 +668,11 @@ export default function GridView() {
   const printConsoleRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  // Scope (oscilloscope) state — ring buffer per scope node
+  const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array ring buffer
+  const scopeWriteIdxRef = useRef(new Map()); // nodeId → write index
+  const SCOPE_BUFFER_SIZE = 128;
+
   // Auto-scroll print console when new logs arrive
   useEffect(() => {
     if (printConsoleRef.current && consoleOpen) {
@@ -589,6 +705,20 @@ export default function GridView() {
         // Keep last 200 entries
         return [...prev, entry].slice(-200);
       });
+    };
+
+    // Handle scope module samples
+    engineRef.current.onScope = (nodeId, value) => {
+      const buffers = scopeBuffersRef.current;
+      const indices = scopeWriteIdxRef.current;
+      if (!buffers.has(nodeId)) {
+        buffers.set(nodeId, new Float32Array(SCOPE_BUFFER_SIZE));
+        indices.set(nodeId, 0);
+      }
+      const buf = buffers.get(nodeId);
+      const idx = indices.get(nodeId);
+      buf[idx % SCOPE_BUFFER_SIZE] = value;
+      indices.set(nodeId, idx + 1);
     };
 
     scriptRunnerRef.current = new ScriptRunner({
@@ -670,12 +800,12 @@ export default function GridView() {
       }
     }
 
-    // ── 0b. Identify sink nodes (print modules) and their input chains ──
-    // Print modules can monitor ANY signal, not just live ones.
-    // Trace backwards from each print module to find all nodes in its input chain
+    // ── 0b. Identify sink nodes (print/scope modules) and their input chains ──
+    // Sink modules can monitor ANY signal, not just live ones.
+    // Trace backwards from each sink module to find all nodes in its input chain
     // and add them to the live set so they play.
-    const printModules = Object.entries(nodes).filter(([, n]) => n.type === 'print');
-    for (const [printId, ] of printModules) {
+    const sinkModules = Object.entries(nodes).filter(([, n]) => n.type === 'print' || n.type === 'scope');
+    for (const [printId, ] of sinkModules) {
       const printNodeId = parseInt(printId);
 
       // Check if this print module has any input connections
@@ -777,12 +907,12 @@ export default function GridView() {
       nodeRouting[id] = { outBus, effectiveOutBus, inBus, isFx, isModulator, modOutBuses };
     }
 
-    // ── 2b. Fix sink nodes (print modules) to read from source's effective out bus ──
+    // ── 2b. Fix sink nodes (print/scope modules) to read from source's effective out bus ──
     // Sink nodes have no outputs, so they should tap into the source's output bus
     // rather than expecting a dedicated connection bus.
     for (const id of live) {
       const node = nodes[id];
-      if (node.type === 'print') {
+      if (node.type === 'print' || node.type === 'scope') {
         const inConn = connections.find(
           (c) => c.toNodeId === id && !c.toParam && live.has(c.fromNodeId)
         );
@@ -792,7 +922,7 @@ export default function GridView() {
           const oldBus = nodeRouting[id].inBus;
           nodeRouting[id].inBus = srcBus;
           if (oldBus !== srcBus) {
-            console.log(`[BUS] print(${id}) inBus: ${oldBus} → ${srcBus} (from source ${inConn.fromNodeId})`);
+            console.log(`[BUS] ${node.type}(${id}) inBus: ${oldBus} → ${srcBus} (from source ${inConn.fromNodeId})`);
           }
         }
       }
@@ -866,9 +996,12 @@ export default function GridView() {
     for (const id of Object.keys(nodes)) {
       const nid = parseInt(id);
       if (!live.has(nid) && engine.isPlaying(nid)) {
-        // Clean up print module polling
+        // Clean up print/scope module polling
         if (nodes[id].type === 'print') {
           engine.stopPrintModule(nid);
+        }
+        if (nodes[id].type === 'scope') {
+          engine.stopScope(nid);
         }
         engine.stop(nid);
       }
@@ -922,6 +1055,12 @@ export default function GridView() {
           engine.playFx(id, schema.synthDef, {
             in_bus: routing.inBus,
             out_c_bus: printBus,
+          });
+        } else if (node.type === 'scope') {
+          const scopeBus = engine.startScope(id);
+          engine.playFx(id, schema.synthDef, {
+            in_bus: routing.inBus,
+            out_c_bus: scopeBus,
           });
         } else {
           engine.playFx(id, schema.synthDef, {
@@ -1103,8 +1242,11 @@ export default function GridView() {
   const removeNode = useCallback(
     (id) => {
       engineRef.current?.stop(id);
+      engineRef.current?.stopScope(id);
       scriptRunnerRef.current?.stop(id);
       envelopeRunnerRef.current?.stop(id);
+      scopeBuffersRef.current.delete(id);
+      scopeWriteIdxRef.current.delete(id);
       setRunningScripts((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -1419,6 +1561,8 @@ export default function GridView() {
         setRunningEnvelopes(new Set());
         setPrintLogs([]);
         setSelectedNodeId(null);
+        scopeBuffersRef.current.clear();
+        scopeWriteIdxRef.current.clear();
 
         // Restore nodes
         const restoredNodes = {};
@@ -1853,7 +1997,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ' scope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2012,6 +2156,17 @@ export default function GridView() {
               </span>
             </div>
           </div>
+        )}
+
+        {/* Scope (oscilloscope) display */}
+        {node.type === 'scope' && (
+          <ScopeCanvas
+            buffersRef={scopeBuffersRef}
+            writeIdxRef={scopeWriteIdxRef}
+            nodeId={node.id}
+            bufferSize={SCOPE_BUFFER_SIZE}
+            accentColor={schema.accent}
+          />
         )}
 
         {/* Parameters (skip hidden params, skip for envelope) */}
@@ -2440,6 +2595,14 @@ export default function GridView() {
                         <div className="print-hint">
                           Connect a signal to this module's input to log its values to the console.
                         </div>
+                      </div>
+                    </div>
+                  ) : selNode.type === 'scope' ? (
+                    <div className="details-body">
+                      <div className="details-placeholder">
+                        Connect a signal source to this module's input to visualize the waveform.
+                        <br /><br />
+                        The scope displays signal values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.
                       </div>
                     </div>
                   ) : (
