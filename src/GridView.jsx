@@ -634,12 +634,17 @@ export default function GridView() {
     // not directly connected to AudioOut. We need them to play.
     const audioRateModConns = connections.filter((c) => c.isAudioRate && c.toParam);
     const modulatorIds = new Set(audioRateModConns.map((c) => c.fromNodeId));
-    const carrierIds = new Set(audioRateModConns.map((c) => c.toNodeId));
 
-    // Add modulators to live set if their carriers are live
-    for (const conn of audioRateModConns) {
-      if (live.has(conn.toNodeId) || carrierIds.has(conn.toNodeId)) {
-        live.add(conn.fromNodeId);
+    // Add modulators to live set if their carriers are live.
+    // Iterate to handle chains (A modulates B modulates C, where C is live).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const conn of audioRateModConns) {
+        if (live.has(conn.toNodeId) && !live.has(conn.fromNodeId)) {
+          live.add(conn.fromNodeId);
+          changed = true;
+        }
       }
     }
 
