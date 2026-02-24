@@ -79,13 +79,22 @@ export class GridEngine {
     // Listen for /c_set replies (control bus value responses)
     this.sonic.on('message', (msg) => {
       // /c_set format: ['/c_set', busIndex, value]
-      if (msg[0] === '/c_set' && this.onPrint) {
+      if (msg[0] === '/c_set') {
         const busIndex = msg[1];
         const value = msg[2];
         // Look up which print module owns this control bus
-        const graphId = this._printBusToGraph.get(busIndex);
-        if (graphId != null) {
-          this.onPrint(graphId, value);
+        if (this.onPrint) {
+          const graphId = this._printBusToGraph.get(busIndex);
+          if (graphId != null) {
+            this.onPrint(graphId, value);
+          }
+        }
+        // Look up which scope module owns this control bus
+        if (this.onScope) {
+          const graphId = this._scopeBusToGraph.get(busIndex);
+          if (graphId != null) {
+            this.onScope(graphId, value);
+          }
         }
       }
     });
@@ -93,6 +102,11 @@ export class GridEngine {
     // Map of control bus index → graph node ID for print modules
     this._printBusToGraph = new Map();
     this._printPollingInterval = null;
+
+    // Scope module state (separate from print for higher polling rate)
+    this.onScope = null; // callback: (graphId, value) => void
+    this._scopeBusToGraph = new Map();
+    this._scopePollingInterval = null;
 
     await this.sonic.init();
     await this.sonic.resume();
@@ -311,6 +325,51 @@ export class GridEngine {
   // Get the control bus index for a print module
   getPrintBus(graphId) {
     for (const [bus, id] of this._printBusToGraph.entries()) {
+      if (id === graphId) return bus;
+    }
+    return null;
+  }
+
+  // ── Scope module methods ─────────────────────────────
+
+  // Allocate a control bus for a scope module and start fast polling
+  startScope(graphId) {
+    const busIndex = 2000 + graphId;
+    this._scopeBusToGraph.set(busIndex, graphId);
+
+    if (!this._scopePollingInterval) {
+      this._scopePollingInterval = setInterval(() => {
+        for (const bus of this._scopeBusToGraph.keys()) {
+          if (this.booted) {
+            try {
+              this.sonic.send('/c_get', bus);
+            } catch { /* ignore */ }
+          }
+        }
+      }, 33); // Poll at ~30 Hz for smoother waveform display
+    }
+
+    return busIndex;
+  }
+
+  // Stop polling for a scope module
+  stopScope(graphId) {
+    for (const [bus, id] of this._scopeBusToGraph.entries()) {
+      if (id === graphId) {
+        this._scopeBusToGraph.delete(bus);
+        break;
+      }
+    }
+
+    if (this._scopeBusToGraph.size === 0 && this._scopePollingInterval) {
+      clearInterval(this._scopePollingInterval);
+      this._scopePollingInterval = null;
+    }
+  }
+
+  // Get the control bus index for a scope module
+  getScopeBus(graphId) {
+    for (const [bus, id] of this._scopeBusToGraph.entries()) {
       if (id === graphId) return bus;
     }
     return null;
