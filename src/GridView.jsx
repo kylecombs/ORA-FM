@@ -318,7 +318,7 @@ const NODE_SCHEMA = {
     accent: '#6ab0b0',
     synthDef: 'print',   // Reuses print synthdef (reads audio → control bus)
     category: 'fx',      // Uses FX routing (reads from in_bus)
-    width: 220,
+    width: 262,
     inputs: ['in'],
     outputs: [],          // Sink node (like print)
     params: {},
@@ -519,84 +519,168 @@ function panForPort(portIndex) {
   return portIndex === 0 ? -0.8 : 0.8;
 }
 
-// ── Oscilloscope canvas component ─────────────────────────
+// ── Oscilloscope canvas component (Signalizer-inspired) ───
+// Renders a phosphor-glow waveform with graticule grid and
+// persistence trail. Polls ~30 Hz via control bus, renders at
+// 60 fps with smooth interpolation.
+const SCOPE_W = 260;
+const SCOPE_H = 140;
+
 function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
+  // Keep a persistence buffer for phosphor decay trail
+  const trailRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    const draw = () => {
-      const w = canvas.width;
-      const h = canvas.height;
-      const buf = buffersRef.current.get(nodeId);
+    // Off-screen canvas for persistence/phosphor decay trail
+    const trail = document.createElement('canvas');
+    trail.width = SCOPE_W;
+    trail.height = SCOPE_H;
+    const tctx = trail.getContext('2d');
+    tctx.fillStyle = '#08080a';
+    tctx.fillRect(0, 0, SCOPE_W, SCOPE_H);
+    trailRef.current = trail;
 
-      ctx.fillStyle = '#0c0b0a';
+    // Parse accent hex → rgba helper
+    const r = parseInt(accentColor.slice(1, 3), 16);
+    const g = parseInt(accentColor.slice(3, 5), 16);
+    const b = parseInt(accentColor.slice(5, 7), 16);
+    const accentRgba = (a) => `rgba(${r},${g},${b},${a})`;
+
+    let prevWriteIdx = 0;
+
+    const draw = () => {
+      const w = SCOPE_W;
+      const h = SCOPE_H;
+      const buf = buffersRef.current.get(nodeId);
+      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
+
+      // ── Phosphor persistence: fade previous frame ──
+      tctx.globalCompositeOperation = 'source-over';
+      tctx.fillStyle = 'rgba(8, 8, 10, 0.12)';
+      tctx.fillRect(0, 0, w, h);
+
+      // ── Draw new trace onto trail canvas ──
+      if (buf && writeIdx > 1) {
+        const len = Math.min(writeIdx, bufferSize);
+
+        // Auto-scale Y axis
+        let min = Infinity, max = -Infinity;
+        for (let i = 0; i < len; i++) {
+          const idx = (writeIdx - len + i + bufferSize) % bufferSize;
+          const v = buf[idx];
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        const range = max - min;
+        if (range < 0.001) { min -= 0.5; max += 0.5; }
+        const pad = (max - min) * 0.12 || 0.1;
+        const yMin = min - pad;
+        const yMax = max + pad;
+        const yScale = h / (yMax - yMin);
+
+        // Only draw new samples since last frame (avoids re-drawing entire buffer)
+        const newSamples = writeIdx - prevWriteIdx;
+        const drawLen = newSamples > 0 && newSamples < bufferSize ? len : len;
+
+        // Glow layer (wide, soft)
+        tctx.globalCompositeOperation = 'lighter';
+        tctx.strokeStyle = accentRgba(0.15);
+        tctx.lineWidth = 6;
+        tctx.lineJoin = 'round';
+        tctx.lineCap = 'round';
+        tctx.beginPath();
+        for (let i = 0; i < drawLen; i++) {
+          const idx = (writeIdx - drawLen + i + bufferSize) % bufferSize;
+          const v = buf[idx];
+          const x = (i / (bufferSize - 1)) * w;
+          const y = h - (v - yMin) * yScale;
+          if (i === 0) tctx.moveTo(x, y);
+          else tctx.lineTo(x, y);
+        }
+        tctx.stroke();
+
+        // Mid glow
+        tctx.strokeStyle = accentRgba(0.3);
+        tctx.lineWidth = 3;
+        tctx.beginPath();
+        for (let i = 0; i < drawLen; i++) {
+          const idx = (writeIdx - drawLen + i + bufferSize) % bufferSize;
+          const v = buf[idx];
+          const x = (i / (bufferSize - 1)) * w;
+          const y = h - (v - yMin) * yScale;
+          if (i === 0) tctx.moveTo(x, y);
+          else tctx.lineTo(x, y);
+        }
+        tctx.stroke();
+
+        // Core trace (bright, thin)
+        tctx.strokeStyle = accentRgba(0.9);
+        tctx.lineWidth = 1.5;
+        tctx.beginPath();
+        for (let i = 0; i < drawLen; i++) {
+          const idx = (writeIdx - drawLen + i + bufferSize) % bufferSize;
+          const v = buf[idx];
+          const x = (i / (bufferSize - 1)) * w;
+          const y = h - (v - yMin) * yScale;
+          if (i === 0) tctx.moveTo(x, y);
+          else tctx.lineTo(x, y);
+        }
+        tctx.stroke();
+        tctx.globalCompositeOperation = 'source-over';
+      }
+
+      prevWriteIdx = writeIdx;
+
+      // ── Compose final frame ──
+      ctx.fillStyle = '#08080a';
       ctx.fillRect(0, 0, w, h);
 
-      // Center line
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.15)';
+      // Graticule grid
+      ctx.strokeStyle = 'rgba(122, 117, 112, 0.08)';
       ctx.lineWidth = 1;
+      // Horizontal divisions (5 lines)
+      for (let i = 1; i < 5; i++) {
+        const y = Math.round(h * (i / 5)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      // Vertical divisions (8 lines)
+      for (let i = 1; i < 8; i++) {
+        const x = Math.round(w * (i / 8)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      // Center line (brighter)
+      ctx.strokeStyle = 'rgba(122, 117, 112, 0.18)';
       ctx.beginPath();
-      ctx.moveTo(0, h / 2);
-      ctx.lineTo(w, h / 2);
+      ctx.moveTo(0, Math.round(h / 2) + 0.5);
+      ctx.lineTo(w, Math.round(h / 2) + 0.5);
       ctx.stroke();
 
-      if (!buf) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
-      }
+      // Draw persistence trail
+      ctx.drawImage(trail, 0, 0);
 
-      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
-      const len = Math.min(writeIdx, bufferSize);
-
-      if (len < 2) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
+      // Value readout overlay
+      if (buf) {
+        const idx = writeIdxRef.current.get(nodeId) || 0;
+        if (idx > 0) {
+          const latest = buf[(idx - 1 + bufferSize) % bufferSize];
+          ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
+          ctx.font = '10px "DM Mono", monospace';
+          ctx.textAlign = 'right';
+          ctx.fillText(latest.toFixed(3), w - 5, 13);
+        }
       }
-
-      // Compute min/max for auto-scaling
-      let min = Infinity, max = -Infinity;
-      for (let i = 0; i < len; i++) {
-        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
-        const v = buf[idx];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-      // Ensure a minimum range to avoid flat line for constant signals
-      const range = max - min;
-      if (range < 0.001) {
-        min -= 0.5;
-        max += 0.5;
-      }
-      const padding = (max - min) * 0.1 || 0.1;
-      const yMin = min - padding;
-      const yMax = max + padding;
-
-      // Draw waveform
-      ctx.strokeStyle = accentColor;
-      ctx.lineWidth = 1.5;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      for (let i = 0; i < len; i++) {
-        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
-        const v = buf[idx];
-        const x = (i / (bufferSize - 1)) * w;
-        const y = h - ((v - yMin) / (yMax - yMin)) * h;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      // Draw latest value text
-      const latest = buf[(writeIdx - 1 + bufferSize) % bufferSize];
-      ctx.fillStyle = 'rgba(212, 207, 200, 0.5)';
-      ctx.font = '9px "DM Mono", monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(latest.toFixed(3), w - 4, 11);
 
       animRef.current = requestAnimationFrame(draw);
     };
@@ -612,8 +696,8 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor 
       <canvas
         ref={canvasRef}
         className="scope-canvas"
-        width={204}
-        height={80}
+        width={SCOPE_W}
+        height={SCOPE_H}
       />
     </div>
   );
