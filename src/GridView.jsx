@@ -520,36 +520,17 @@ function panForPort(portIndex) {
 }
 
 // ── Oscilloscope canvas component ──────────────────────────
-// Two modes:
-//   'classic' — CRT phosphor-glow with persistence trail, graticule, additive blending
-//   'modern'  — Clean utility trace matching the app's dark aesthetic
 const SCOPE_W = 260;
-const SCOPE_H = 140;
-const SCOPE_H_MODERN = 100;
+const SCOPE_H = 100;
 
-function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor, mode }) {
+function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
-  const trailRef = useRef(null);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
-
-  const isClassic = mode === 'classic';
-  const h = isClassic ? SCOPE_H : SCOPE_H_MODERN;
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-
-    // Off-screen canvas for classic persistence trail
-    const trail = document.createElement('canvas');
-    trail.width = SCOPE_W;
-    trail.height = SCOPE_H; // use max height so it works if toggled
-    const tctx = trail.getContext('2d');
-    tctx.fillStyle = '#08080a';
-    tctx.fillRect(0, 0, SCOPE_W, SCOPE_H);
-    trailRef.current = trail;
 
     // Parse accent hex → rgba helper
     const r = parseInt(accentColor.slice(1, 3), 16);
@@ -592,130 +573,52 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       c.stroke();
     };
 
-    // ── Classic mode draw (phosphor CRT) ──
-    const drawClassic = () => {
+    const draw = () => {
       const w = SCOPE_W;
-      const ch = SCOPE_H;
-      const buf = buffersRef.current.get(nodeId);
-      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
-
-      // Phosphor persistence: fade previous frame
-      tctx.globalCompositeOperation = 'source-over';
-      tctx.fillStyle = 'rgba(8, 8, 10, 0.12)';
-      tctx.fillRect(0, 0, w, ch);
-
-      if (buf && writeIdx > 1) {
-        const len = Math.min(writeIdx, bufferSize);
-        const { yMin, yMax } = computeYBounds(buf, writeIdx, len);
-        const yScale = ch / (yMax - yMin);
-        const pts = buildPath(buf, writeIdx, len, w, ch, yMin, yScale);
-
-        tctx.globalCompositeOperation = 'lighter';
-        tctx.lineJoin = 'round';
-        tctx.lineCap = 'round';
-
-        // Glow layer (wide, soft)
-        tctx.strokeStyle = accentRgba(0.15);
-        tctx.lineWidth = 6;
-        strokePath(tctx, pts);
-
-        // Mid glow
-        tctx.strokeStyle = accentRgba(0.3);
-        tctx.lineWidth = 3;
-        strokePath(tctx, pts);
-
-        // Core trace (bright, thin)
-        tctx.strokeStyle = accentRgba(0.9);
-        tctx.lineWidth = 1.5;
-        strokePath(tctx, pts);
-
-        tctx.globalCompositeOperation = 'source-over';
-      }
-
-      // Compose final frame
-      ctx.fillStyle = '#08080a';
-      ctx.fillRect(0, 0, w, ch);
-
-      // Graticule
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.08)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 5; i++) {
-        const y = Math.round(ch * (i / 5)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      }
-      for (let i = 1; i < 8; i++) {
-        const x = Math.round(w * (i / 8)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
-      }
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.18)';
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(ch / 2) + 0.5);
-      ctx.lineTo(w, Math.round(ch / 2) + 0.5);
-      ctx.stroke();
-
-      // Persistence trail
-      ctx.drawImage(trail, 0, 0);
-
-      // Value readout
-      if (buf) {
-        const idx = writeIdxRef.current.get(nodeId) || 0;
-        if (idx > 0) {
-          const latest = buf[(idx - 1 + bufferSize) % bufferSize];
-          ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
-          ctx.font = '10px "DM Mono", monospace';
-          ctx.textAlign = 'right';
-          ctx.fillText(latest.toFixed(3), w - 5, 13);
-        }
-      }
-    };
-
-    // ── Modern mode draw (clean utility) ──
-    const drawModern = () => {
-      const w = SCOPE_W;
-      const mh = SCOPE_H_MODERN;
+      const h = SCOPE_H;
       const buf = buffersRef.current.get(nodeId);
       const writeIdx = writeIdxRef.current.get(nodeId) || 0;
 
       ctx.fillStyle = '#111010';
-      ctx.fillRect(0, 0, w, mh);
+      ctx.fillRect(0, 0, w, h);
 
       // Subtle center line
       ctx.strokeStyle = 'rgba(122, 117, 112, 0.12)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 2) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 2) + 0.5);
+      ctx.moveTo(0, Math.round(h / 2) + 0.5);
+      ctx.lineTo(w, Math.round(h / 2) + 0.5);
       ctx.stroke();
 
       // Quarter lines
       ctx.strokeStyle = 'rgba(122, 117, 112, 0.05)';
       ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 4) + 0.5);
-      ctx.moveTo(0, Math.round(mh * 3 / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh * 3 / 4) + 0.5);
+      ctx.moveTo(0, Math.round(h / 4) + 0.5);
+      ctx.lineTo(w, Math.round(h / 4) + 0.5);
+      ctx.moveTo(0, Math.round(h * 3 / 4) + 0.5);
+      ctx.lineTo(w, Math.round(h * 3 / 4) + 0.5);
       ctx.stroke();
 
       if (!buf || writeIdx < 2) {
-        // "No signal" text
         ctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
         ctx.font = '9px "DM Mono", monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('no signal', w / 2, mh / 2 + 3);
+        ctx.fillText('no signal', w / 2, h / 2 + 3);
+        animRef.current = requestAnimationFrame(draw);
         return;
       }
 
       const len = Math.min(writeIdx, bufferSize);
       const { yMin, yMax } = computeYBounds(buf, writeIdx, len);
-      const yScale = mh / (yMax - yMin);
-      const pts = buildPath(buf, writeIdx, len, w, mh, yMin, yScale);
+      const yScale = h / (yMax - yMin);
+      const pts = buildPath(buf, writeIdx, len, w, h, yMin, yScale);
 
       // Filled area under curve (subtle)
       ctx.fillStyle = accentRgba(0.06);
       ctx.beginPath();
-      ctx.moveTo(pts[0].x, mh);
+      ctx.moveTo(pts[0].x, h);
       for (const p of pts) ctx.lineTo(p.x, p.y);
-      ctx.lineTo(pts[pts.length - 1].x, mh);
+      ctx.lineTo(pts[pts.length - 1].x, h);
       ctx.closePath();
       ctx.fill();
 
@@ -737,13 +640,9 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       ctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
       ctx.textAlign = 'left';
       const { yMin: dispMin, yMax: dispMax } = computeYBounds(buf, writeIdx, len);
-      ctx.fillText((dispMin + (dispMax - dispMin) * 0.12).toFixed(1), 4, mh - 4);
+      ctx.fillText((dispMin + (dispMax - dispMin) * 0.12).toFixed(1), 4, h - 4);
       ctx.fillText((dispMax - (dispMax - dispMin) * 0.12).toFixed(1), 4, 10);
-    };
 
-    const draw = () => {
-      if (modeRef.current === 'classic') drawClassic();
-      else drawModern();
       animRef.current = requestAnimationFrame(draw);
     };
 
@@ -754,12 +653,12 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
   }, [buffersRef, writeIdxRef, nodeId, bufferSize, accentColor]);
 
   return (
-    <div className={`scope-body ${isClassic ? 'scope-classic' : 'scope-modern'}`}>
+    <div className="scope-body">
       <canvas
         ref={canvasRef}
         className="scope-canvas"
         width={SCOPE_W}
-        height={h}
+        height={SCOPE_H}
       />
     </div>
   );
@@ -1374,9 +1273,6 @@ export default function GridView() {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
     }
-    if (type === 'scope') {
-      node.scopeMode = 'modern'; // 'modern' (clean utility) or 'classic' (phosphor CRT)
-    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -1496,16 +1392,6 @@ export default function GridView() {
 
   const clearPrintLogs = useCallback(() => {
     setPrintLogs([]);
-  }, []);
-
-  // ── Scope mode toggle ─────────────────────────────────
-  const handleScopeModeToggle = useCallback((nodeId) => {
-    setNodes((prev) => {
-      const node = prev[nodeId];
-      if (!node) return prev;
-      const next = node.scopeMode === 'classic' ? 'modern' : 'classic';
-      return { ...prev, [nodeId]: { ...node, scopeMode: next } };
-    });
   }, []);
 
   // ── Envelope handlers ──────────────────────────────────
@@ -1660,7 +1546,6 @@ export default function GridView() {
         if (node.printPrefix != null) entry.printPrefix = node.printPrefix;
         if (node.printColor != null) entry.printColor = node.printColor;
         if (node.bangSize != null) entry.bangSize = node.bangSize;
-        if (node.scopeMode != null) entry.scopeMode = node.scopeMode;
         return entry;
       }),
       connections: connections.map((c) => {
@@ -1747,7 +1632,6 @@ export default function GridView() {
           if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
           if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
           if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
-          if (n.scopeMode != null) restoredNodes[n.id].scopeMode = n.scopeMode;
         }
 
         // Restore connections
@@ -2158,7 +2042,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ' scope' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2321,25 +2205,13 @@ export default function GridView() {
 
         {/* Scope (oscilloscope) display */}
         {node.type === 'scope' && (
-          <>
-            <ScopeCanvas
-              buffersRef={scopeBuffersRef}
-              writeIdxRef={scopeWriteIdxRef}
-              nodeId={node.id}
-              bufferSize={SCOPE_BUFFER_SIZE}
-              accentColor={schema.accent}
-              mode={node.scopeMode || 'modern'}
-            />
-            <div className="scope-controls">
-              <button
-                className="scope-mode-btn"
-                onClick={(e) => { e.stopPropagation(); handleScopeModeToggle(node.id); }}
-                title={`Switch to ${(node.scopeMode || 'modern') === 'classic' ? 'modern' : 'classic'} mode`}
-              >
-                {(node.scopeMode || 'modern') === 'classic' ? 'CRT' : 'clean'}
-              </button>
-            </div>
-          </>
+          <ScopeCanvas
+            buffersRef={scopeBuffersRef}
+            writeIdxRef={scopeWriteIdxRef}
+            nodeId={node.id}
+            bufferSize={SCOPE_BUFFER_SIZE}
+            accentColor={schema.accent}
+          />
         )}
 
         {/* Parameters (skip hidden params, skip for envelope) */}
@@ -2773,34 +2645,6 @@ export default function GridView() {
                   ) : selNode.type === 'scope' ? (
                     <div className="details-body">
                       <div className="scope-details-options">
-                        <div className="scope-mode-option">
-                          <span className="scope-mode-label">Display mode</span>
-                          <div className="scope-mode-toggle-group">
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'classic' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'classic' },
-                              }))}
-                            >
-                              Classic
-                            </button>
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'modern' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'modern' },
-                              }))}
-                            >
-                              Modern
-                            </button>
-                          </div>
-                        </div>
-                        <div className="scope-mode-desc">
-                          {(selNode.scopeMode || 'modern') === 'classic'
-                            ? 'CRT phosphor glow with persistence trail and graticule grid.'
-                            : 'Clean utility trace with filled area, matching the app aesthetic.'}
-                        </div>
                         <div className="print-hint">
                           Connect a signal source to visualize the waveform.
                           Displays values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.

@@ -1789,21 +1789,6 @@
   width: 262px;
 }
 
-/* Classic mode — dark CRT background */
-.sense-node.scope.scope-classic {
-  background: #08080a;
-  border-color: rgba(106, 176, 176, 0.2);
-}
-
-.sense-node.scope.scope-classic::before {
-  background: var(--accent);
-}
-
-/* Modern mode — matches standard module surface */
-.sense-node.scope.scope-modern {
-  background: var(--surface, #111010);
-}
-
 .scope-body {
   display: flex;
   flex-direction: column;
@@ -1812,108 +1797,10 @@
 .scope-canvas {
   display: block;
   width: 100%;
-}
-
-.scope-classic .scope-canvas {
-  height: 140px;
-}
-
-.scope-modern .scope-canvas {
   height: 100px;
-  border-bottom: 1px solid rgba(37, 35, 32, 0.5);
-}
-
-/* ── Scope inline controls ────────────────────── */
-.scope-controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 3px 6px;
-}
-
-.scope-mode-btn {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.45rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  background: rgba(106, 176, 176, 0.08);
-  border: 1px solid rgba(106, 176, 176, 0.2);
-  color: rgba(106, 176, 176, 0.6);
-}
-
-.scope-mode-btn:hover {
-  background: rgba(106, 176, 176, 0.15);
-  color: rgba(106, 176, 176, 0.85);
-  border-color: rgba(106, 176, 176, 0.35);
-}
-
-.scope-classic .scope-canvas {
-  border-radius: 0;
-}
-
-.scope-modern .scope-canvas {
-  border-radius: 0;
 }
 
 /* ── Scope details panel ──────────────────────── */
 .scope-details-options {
   padding: 10px;
-}
-
-.scope-mode-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.scope-mode-label {
-  font-size: 0.6rem;
-  color: var(--dim, #7a7570);
-  letter-spacing: 0.06em;
-}
-
-.scope-mode-toggle-group {
-  display: flex;
-  gap: 0;
-  border-radius: 5px;
-  overflow: hidden;
-  border: 1px solid var(--border, #252320);
-}
-
-.scope-mode-choice {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.5rem;
-  letter-spacing: 0.06em;
-  padding: 3px 10px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  background: transparent;
-  border: none;
-  color: var(--dim, #7a7570);
-}
-
-.scope-mode-choice:first-child {
-  border-right: 1px solid var(--border, #252320);
-}
-
-.scope-mode-choice.active {
-  background: rgba(106, 176, 176, 0.12);
-  color: #6ab0b0;
-}
-
-.scope-mode-choice:hover:not(.active) {
-  background: rgba(106, 176, 176, 0.06);
-  color: var(--ink, #d4cfc8);
-}
-
-.scope-mode-desc {
-  font-size: 0.55rem;
-  color: var(--dim, #7a7570);
-  line-height: 1.4;
-  margin-bottom: 10px;
 }
