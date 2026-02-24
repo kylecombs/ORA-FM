@@ -1310,8 +1310,16 @@ export default function GridView() {
         // Allocate a control bus (stable — same key returns same bus)
         const busIndex = engine.allocControlBus(modKey);
 
-        // Write the current value to the control bus
-        engine.setControlBus(busIndex, value);
+        // Write the current value to the control bus.
+        // When an envelope (or constant) drives a modulator's amp, scale
+        // the bus value by the mod-depth factor so the modulation signal is
+        // large enough for audible FM/AM/PM.  Without this, the envelope's
+        // 0-1 range produces at most ±1 Hz frequency deviation.
+        let busValue = value;
+        if (conn.toParam === 'amp' && modAmpScaleRef.current[conn.toNodeId]) {
+          busValue = value * modAmpScaleRef.current[conn.toNodeId];
+        }
+        engine.setControlBus(busIndex, busValue);
 
         // Map the target synth's param to read from this bus
         if (engine.isPlaying(conn.toNodeId)) {
@@ -1329,7 +1337,13 @@ export default function GridView() {
         const nodeId = parseInt(modKey.slice(0, sepIdx));
         const param = modKey.slice(sepIdx + 1);
         const targetNode = nodes[nodeId];
-        const baseValue = targetNode?.params[param] ?? 0;
+        let baseValue = targetNode?.params[param] ?? 0;
+
+        // When unmapping a modulator's amp, restore the scaled value so the
+        // modulation depth stays correct after the envelope is disconnected.
+        if (param === 'amp' && modAmpScaleRef.current[nodeId]) {
+          baseValue *= modAmpScaleRef.current[nodeId];
+        }
 
         if (info.isAudioRate) {
           // Unmap audio-rate modulation
