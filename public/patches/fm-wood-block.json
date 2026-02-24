@@ -2,8 +2,8 @@
   "name": "FM Wood Block",
   "version": 1,
   "createdAt": "2026-02-24T00:00:00.000Z",
-  "nextId": 8,
-  "connId": 6,
+  "nextId": 9,
+  "connId": 8,
   "nodes": [
     {
       "id": 1,
@@ -62,6 +62,14 @@
       ],
       "curves": [0, -4, -2],
       "duration": 0.15
+    },
+    {
+      "id": 8,
+      "type": "bang",
+      "x": 320,
+      "y": 510,
+      "params": { "value": 0 },
+      "bangSize": 80
     }
   ],
   "connections": [
@@ -69,6 +77,8 @@
     { "id": 2, "from": 4, "fromPort": 0, "to": 2, "toPort": -1, "toParam": "freq", "isAudioRate": true },
     { "id": 3, "from": 2, "fromPort": 0, "to": 1, "toPort": 0 },
     { "id": 4, "from": 5, "fromPort": 0, "to": 2, "toPort": -1, "toParam": "amp" },
-    { "id": 5, "from": 6, "fromPort": 0, "to": 3, "toPort": -1, "toParam": "amp" }
+    { "id": 5, "from": 6, "fromPort": 0, "to": 3, "toPort": -1, "toParam": "amp" },
+    { "id": 6, "from": 8, "fromPort": 0, "to": 5, "toPort": -1, "toParam": "trig" },
+    { "id": 7, "from": 8, "fromPort": 0, "to": 6, "toPort": -1, "toParam": "trig" }
   ]
 }
