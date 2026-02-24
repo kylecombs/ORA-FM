@@ -51,6 +51,7 @@ export class GridEngine {
     this.booted = false;
     this.onStatus = null;
     this.onPrint = null; // callback for print module messages: (graphId, value) => void
+    this.onScope = null; // callback for scope module samples: (graphId, value) => void
 
     // Control bus allocator (buses 0–4095 available, separate from audio buses)
     this._nextControlBus = 0;
@@ -104,7 +105,6 @@ export class GridEngine {
     this._printPollingInterval = null;
 
     // Scope module state (separate from print for higher polling rate)
-    this.onScope = null; // callback: (graphId, value) => void
     this._scopeBusToGraph = new Map();
     this._scopePollingInterval = null;
 
