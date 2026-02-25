@@ -15,6 +15,8 @@
 //    routine(generatorFn)         — generator coroutine
 //    lfo(rate, min, max)          — sine-wave oscillator on output 0
 //    ramp(from, to, duration)     — linear ramp on output 0
+//    tuplet(divisions, duration)  — nested tuplet pattern (loops)
+//    w(weight, content)           — weighted subdivision for tuplet()
 //    random(min, max)             — random float
 //    randomInt(min, max)          — random integer
 //    log(…args)                   — print to console
@@ -180,16 +182,111 @@ export class ScriptRunner {
       return Math.floor(random(min, max + 1));
     }
 
+    // ── Nested tuplet helpers ───────────────────────────
+    // w(weight, content) — tag a subdivision with a relative weight
+    function w(weight, content) {
+      return { _tw: Math.max(0.001, +weight || 1), _tc: content };
+    }
+
+    // Internal: recursively flatten a nested tuplet tree into timed events
+    function _flattenTuplet(divisions, offset, size, events) {
+      // Calculate total weight of all subdivisions
+      let totalWeight = 0;
+      for (let j = 0; j < divisions.length; j++) {
+        const el = divisions[j];
+        if (el && typeof el === 'object' && !Array.isArray(el) && el._tw !== undefined) {
+          totalWeight += el._tw;
+        } else {
+          totalWeight += 1;
+        }
+      }
+
+      let runningOffset = offset;
+      for (let j = 0; j < divisions.length; j++) {
+        let el = divisions[j];
+        let weight = 1;
+
+        // Unwrap weighted element
+        if (el && typeof el === 'object' && !Array.isArray(el) && el._tw !== undefined) {
+          weight = el._tw;
+          el = el._tc;
+        }
+
+        const elSize = (weight / totalWeight) * size;
+
+        if (Array.isArray(el)) {
+          // Nested tuplet — recurse
+          _flattenTuplet(el, runningOffset, elSize, events);
+        } else if (el === null || el === undefined || el === '_') {
+          // Rest (null) or tie ('_') — no event emitted
+        } else if (typeof el === 'number') {
+          events.push({ time: runningOffset, value: el });
+        }
+
+        runningOffset += elSize;
+      }
+    }
+
+    function tuplet(divisions, duration) {
+      if (ctx.stopped) return;
+      if (!Array.isArray(divisions) || divisions.length === 0) {
+        log('tuplet: divisions must be a non-empty array');
+        return;
+      }
+      const dur = Math.max(0.01, duration || 1);
+
+      // Flatten the nested structure into timed events (normalized 0–1)
+      const events = [];
+      _flattenTuplet(divisions, 0, 1, events);
+      events.sort((a, b) => a.time - b.time);
+
+      if (events.length === 0) {
+        log('tuplet: no events generated (all rests?)');
+        return;
+      }
+
+      // Pre-compute inter-event delays (including wrap-around for looping)
+      const delays = [];
+      for (let j = 0; j < events.length; j++) {
+        const next = (j + 1) % events.length;
+        let dt;
+        if (next === 0) {
+          // Wrap: time from last event to end of cycle + time from start to first event
+          dt = (1 - events[j].time) + events[0].time;
+        } else {
+          dt = events[next].time - events[j].time;
+        }
+        delays.push(Math.max(0.01, dt * dur)); // seconds, min 10ms
+      }
+
+      // Emit first event immediately
+      let i = 0;
+      out(events[0].value);
+
+      function step() {
+        if (ctx.stopped) return;
+        const ms = delays[i] * 1000;
+        const id = setTimeout(() => {
+          if (ctx.stopped) return;
+          i = (i + 1) % events.length;
+          out(events[i].value);
+          step();
+        }, ms);
+        addTimer(id, 'timeout');
+      }
+      step();
+    }
+
     // ── Evaluate the script ─────────────────────────────
     // Wrap in a Function to restrict scope. The function receives
     // named API bindings and runs the user code.
     const apiNames = [
       'setOutputs', 'out', 'log', 'pattern', 'routine', 'lfo', 'ramp',
-      'random', 'randomInt', 'Math',
+      'random', 'randomInt', 'tuplet', 'w', 'Math',
     ];
     const apiValues = [
       setOutputs, out, log, pattern, routine, lfo, ramp,
-      random, randomInt, Math,
+      random, randomInt, tuplet, w, Math,
     ];
 
     try {
