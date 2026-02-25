@@ -121,6 +121,50 @@ tuplet([48, 50, [60, 62, 64], 55, 57, 59, 36], 3.0)
 
 The pattern loops automatically. The first value is emitted immediately.
 
+#### Ratcheting
+
+Use nesting to subdivide a single beat into rapid-fire repetitions — a classic ratchet effect.
+
+```javascript
+// One beat out of four ratchets into 4 rapid hits
+tuplet([60, [72, 72, 72, 72], 64, 67], 2.0)
+//      ↑    ↑ ratchet ×4     ↑   ↑
+//   500ms  4×125ms          500ms 500ms
+
+// Two beats get different subdivisions
+tuplet([60, [72, 72, 72], 64, [67, 67]], 2.0)
+//          ↑ triplet ↑       ↑ 2× ↑
+
+// Nested ratchet: subdivide a subdivision even further
+tuplet([60, [72, [84, 84, 84], 72], 64], 2.0)
+//               ↑ 3 hits crammed into 1/3 of 1/3 = 1/9 of the cycle
+
+// Progressive density: each beat doubles in speed
+tuplet([
+  [60],
+  [60, 60],
+  [60, 60, 60, 60],
+  [60, 60, 60, 60, 60, 60, 60, 60]
+], 4.0)
+// 1 → 2 → 4 → 8 hits per beat
+```
+
+#### Weighted ratchets
+
+Combine `w()` with ratcheting for accented or accelerating subdivisions.
+
+```javascript
+// Ratchet with a longer first hit (accent)
+tuplet([60, [w(2, 72), 72, 72], 64, 67], 2.0)
+
+// Accelerating feel via decreasing weights
+tuplet([60, [w(4, 72), w(2, 72), w(1, 72)], 64], 2.0)
+```
+
+#### Nesting depth
+
+There is no hard limit on nesting depth. Each level subdivides its parent's time slot. The practical limit is the 10ms minimum step time — for a 2-second cycle, that allows roughly 7–8 levels of binary subdivision before events clamp (2s → 1s → 500ms → … → 15ms).
+
 ---
 
 ### `w(weight, content)`
