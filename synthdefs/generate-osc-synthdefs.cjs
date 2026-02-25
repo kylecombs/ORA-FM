@@ -2,13 +2,16 @@
 /**
  * generate-osc-synthdefs.cjs
  *
- * Generates .scsyndef binary files for 3 basic waveform oscillators:
- * saw_osc, pulse_osc, tri_osc
+ * Generates .scsyndef binary files for all custom oscillator/generator modules:
  *
- * Each oscillator follows the same pattern as sine.scd:
- *   - Control-rate base parameters (freq, amp, [width], pan, out_bus)
- *   - Audio-rate modulation inputs (freq_mod, amp_mod, [width_mod])
- *   - Modulation is added to base values
+ *   Basic waveforms:  saw_osc, pulse_osc, tri_osc
+ *   Harmonic:         blip_osc, formant_osc
+ *   Noise:            white_noise, pink_noise, crackle, dust
+ *   LF Random:        lfnoise0, lfnoise1, lfnoise2
+ *
+ * Each module follows the same pattern:
+ *   - Control-rate base parameters + pan + out_bus
+ *   - Audio-rate modulation inputs (added to base values)
  *   - Safety clipping on bus 0 output
  *
  * Used when sclang is not available in the build environment.
@@ -56,8 +59,8 @@ class SynthDef {
     this.name = name;
     this.constants = [];
     this._constMap = new Map();
-    this.params = [];      // { name, defaultVal }
-    this.ugens = [];       // { className, calcRate, inputs, outputs, specialIndex }
+    this.params = [];
+    this.ugens = [];
   }
 
   const(val) {
@@ -92,23 +95,23 @@ class SynthDef {
   }
 
   byteSize() {
-    let s = 4 + 4 + 2;          // magic + version + numDefs
-    s += 1 + this.name.length;   // synthdef name (pstring)
-    s += 4 + this.constants.length * 4;  // constants
-    s += 4 + this.params.length * 4;     // param defaults
-    s += 4;                              // numParamNames
+    let s = 4 + 4 + 2;
+    s += 1 + this.name.length;
+    s += 4 + this.constants.length * 4;
+    s += 4 + this.params.length * 4;
+    s += 4;
     for (const p of this.params) s += 1 + p.name.length + 4;
-    s += 4;                              // numUGens
+    s += 4;
     for (const u of this.ugens) {
       s += 1 + u.className.length;
-      s += 1;                         // calcRate
-      s += 4;                         // numInputs
-      s += 4;                         // numOutputs
-      s += 2;                         // specialIndex
-      s += u.inputs.length * 8;       // inputs (2x int32 each)
-      s += u.outputs.length;          // output calc rates
+      s += 1;
+      s += 4;
+      s += 4;
+      s += 2;
+      s += u.inputs.length * 8;
+      s += u.outputs.length;
     }
-    s += 2;                            // numVariants
+    s += 2;
     return s;
   }
 
@@ -116,8 +119,8 @@ class SynthDef {
     const w = new BufWriter(this.byteSize());
 
     w.buf.write('SCgf', 0, 'ascii'); w.pos = 4;
-    w.int32(2);         // version
-    w.int16(1);         // 1 def per file
+    w.int32(2);
+    w.int16(1);
 
     w.pstring(this.name);
 
@@ -147,7 +150,7 @@ class SynthDef {
       for (const rate of u.outputs) w.int8(rate);
     }
 
-    w.int16(0);  // variants
+    w.int16(0);
 
     return w.result();
   }
@@ -159,34 +162,27 @@ const SCALAR = 0, CONTROL = 1, AUDIO = 2;
 // BinaryOpUGen special index constants
 const B_ADD = 0, B_MUL = 2, B_LTE = 10, B_MAX = 13;
 
-// ── Oscillator SynthDef builder ───────────────────────────────────────────────
+// ── General oscillator SynthDef builder ───────────────────────────────────────
 //
-// All source oscillators follow this pattern:
+// Config format:
+//   name     — synthdef name (e.g. 'saw_osc')
+//   oscUGen  — UGen class name (e.g. 'Saw', 'Blip', 'WhiteNoise')
+//   params   — array of parameter descriptors:
+//     { name, default, kind, modName?, clamp? }
 //
-// Parameters (kr):
-//   freq      - base frequency Hz (default 440)
-//   amp       - base amplitude 0..1 (default 0.5)
-//   [width]   - pulse width 0..1 (Pulse only, default 0.5)
-//   pan       - stereo position -1..+1 (default 0)
-//   out_bus   - audio bus index (default 0)
+//     kind:
+//       'osc' — fed to the oscillator UGen as an input (in declaration order)
+//       'amp' — multiplied with the oscillator output (exactly one)
 //
-// Parameters (ar):
-//   freq_mod  - audio-rate frequency modulation
-//   amp_mod   - audio-rate amplitude modulation
-//   [width_mod] - audio-rate pulse width modulation (Pulse only)
+//     modName: name of the audio-rate modulation parameter (omit if not modulatable)
+//     clamp:   [min, max] → Clip, or [min] → max(val, min)
+//              'amp' kind auto-clamps to >= 0 if no clamp specified
 //
-// Signal flow:
-//   finalFreq  = freq + freq_mod
-//   finalAmp   = max(amp + amp_mod, 0)
-//   [finalWidth = clip(width + width_mod, 0, 1)]
-//   sig        = OscUGen.ar(finalFreq, ...) * finalAmp
-//   stereo     = Pan2.ar(sig, pan, 1)
-//   safe       = Select.ar(out_bus <= 0, [stereo, clip(stereo)])
-//   Out.ar(out_bus, safe)
+// All synthdefs automatically get pan (kr) and out_bus (kr),
+// plus the standard safety-clip/Select/Out tail.
 
 function buildOscSynthDef(config) {
-  const { name, oscUGen, hasWidth } = config;
-
+  const { name, oscUGen, params: paramDefs } = config;
   const sd = new SynthDef(name);
 
   // ── Constants ───────────────────────────────────────────────────────────────
@@ -194,23 +190,21 @@ function buildOscSynthDef(config) {
   const C1  = sd.const(1);
   const Cn1 = sd.const(-1);
 
-  // ── kr parameters ───────────────────────────────────────────────────────────
-  const PI_FREQ    = sd.addParam('freq', 440);
-  const PI_AMP     = sd.addParam('amp', 0.5);
-  let PI_WIDTH = -1;
-  if (hasWidth) {
-    PI_WIDTH = sd.addParam('width', 0.5);
+  // ── Register kr signal params ───────────────────────────────────────────────
+  for (const p of paramDefs) {
+    sd.addParam(p.name, p.default);
   }
-  const PI_PAN     = sd.addParam('pan', 0);
-  const PI_OUT_BUS = sd.addParam('out_bus', 0);
+  // pan and out_bus are always last among kr params
+  const PI_PAN     = sd.params.length;  sd.addParam('pan', 0);
+  const PI_OUT_BUS = sd.params.length;  sd.addParam('out_bus', 0);
 
-  // ── ar parameters ───────────────────────────────────────────────────────────
   const firstArParam = sd.params.length;
-  const PI_FREQ_MOD = sd.addParam('freq_mod', 0);
-  const PI_AMP_MOD  = sd.addParam('amp_mod', 0);
-  let PI_WIDTH_MOD = -1;
-  if (hasWidth) {
-    PI_WIDTH_MOD = sd.addParam('width_mod', 0);
+
+  // ── Register ar modulation params ───────────────────────────────────────────
+  for (const p of paramDefs) {
+    if (p.modName) {
+      sd.addParam(p.modName, 0);
+    }
   }
 
   // ── Control UGens (one per kr param) ────────────────────────────────────────
@@ -228,42 +222,72 @@ function buildOscSynthDef(config) {
   }
 
   function krRef(paramIdx) { return sd.ref(krUgens[paramIdx], 0); }
-  function arRef(paramIdx) { return sd.ref(arUgens[paramIdx - krCount], 0); }
+  function arRef(arIdx) { return sd.ref(arUgens[arIdx], 0); }
 
-  // ── finalFreq = freq + freq_mod ─────────────────────────────────────────────
-  const addFreq = sd.addUGen('BinaryOpUGen', AUDIO,
-    [krRef(PI_FREQ), arRef(PI_FREQ_MOD)], 1, B_ADD);
+  // ── Combine base + mod for each signal param ───────────────────────────────
+  const combinedRefs = [];
+  let arIdx = 0;
+  for (let i = 0; i < paramDefs.length; i++) {
+    const p = paramDefs[i];
+    if (p.modName) {
+      // base + mod (audio rate)
+      const add = sd.addUGen('BinaryOpUGen', AUDIO,
+        [krRef(i), arRef(arIdx)], 1, B_ADD);
+      arIdx++;
+      let ref = sd.ref(add, 0);
 
-  // ── finalAmp = max(amp + amp_mod, 0) ────────────────────────────────────────
-  const addAmp = sd.addUGen('BinaryOpUGen', AUDIO,
-    [krRef(PI_AMP), arRef(PI_AMP_MOD)], 1, B_ADD);
-  const finalAmp = sd.addUGen('BinaryOpUGen', AUDIO,
-    [sd.ref(addAmp, 0), C0], 1, B_MAX);
+      // Apply clamping
+      if (p.clamp && p.clamp.length === 2) {
+        // Clip to [min, max]
+        const cMin = sd.const(p.clamp[0]);
+        const cMax = sd.const(p.clamp[1]);
+        const clip = sd.addUGen('Clip', AUDIO, [ref, cMin, cMax], 1);
+        ref = sd.ref(clip, 0);
+      } else if (p.clamp && p.clamp.length === 1) {
+        // max(val, min)
+        const cMin = sd.const(p.clamp[0]);
+        const mx = sd.addUGen('BinaryOpUGen', AUDIO, [ref, cMin], 1, B_MAX);
+        ref = sd.ref(mx, 0);
+      } else if (p.kind === 'amp') {
+        // amp always >= 0
+        const mx = sd.addUGen('BinaryOpUGen', AUDIO, [ref, C0], 1, B_MAX);
+        ref = sd.ref(mx, 0);
+      }
 
-  // ── finalWidth = clip(width + width_mod, 0, 1) (Pulse only) ────────────────
-  let finalWidthRef = null;
-  if (hasWidth) {
-    const addWidth = sd.addUGen('BinaryOpUGen', AUDIO,
-      [krRef(PI_WIDTH), arRef(PI_WIDTH_MOD)], 1, B_ADD);
-    const clipWidth = sd.addUGen('Clip', AUDIO,
-      [sd.ref(addWidth, 0), C0, C1], 1);
-    finalWidthRef = sd.ref(clipWidth, 0);
+      combinedRefs.push(ref);
+    } else {
+      // No modulation — use kr value directly
+      combinedRefs.push(krRef(i));
+    }
   }
 
-  // ── Oscillator UGen ─────────────────────────────────────────────────────────
-  const oscInputs = [sd.ref(addFreq, 0)];
-  if (hasWidth) {
-    oscInputs.push(finalWidthRef);
+  // ── Build oscillator inputs (collect 'osc' kind params in order) ────────────
+  const oscInputs = [];
+  let ampRef = null;
+  for (let i = 0; i < paramDefs.length; i++) {
+    if (paramDefs[i].kind === 'osc') {
+      oscInputs.push(combinedRefs[i]);
+    } else if (paramDefs[i].kind === 'amp') {
+      ampRef = combinedRefs[i];
+    }
   }
+
+  // ── Create oscillator UGen ──────────────────────────────────────────────────
   const osc = sd.addUGen(oscUGen, AUDIO, oscInputs, 1);
 
   // ── sig = osc * finalAmp ────────────────────────────────────────────────────
-  const sig = sd.addUGen('BinaryOpUGen', AUDIO,
-    [sd.ref(osc, 0), sd.ref(finalAmp, 0)], 1, B_MUL);
+  let sigRef;
+  if (ampRef) {
+    const sig = sd.addUGen('BinaryOpUGen', AUDIO,
+      [sd.ref(osc, 0), ampRef], 1, B_MUL);
+    sigRef = sd.ref(sig, 0);
+  } else {
+    sigRef = sd.ref(osc, 0);
+  }
 
   // ── Pan2.ar(sig, pan, 1) → [L, R] ──────────────────────────────────────────
   const pan2 = sd.addUGen('Pan2', AUDIO,
-    [sd.ref(sig, 0), krRef(PI_PAN), C1], 2);
+    [sigRef, krRef(PI_PAN), C1], 2);
 
   // ── Safety clip for bus 0 ───────────────────────────────────────────────────
   const clipL = sd.addUGen('Clip', AUDIO,
@@ -271,7 +295,7 @@ function buildOscSynthDef(config) {
   const clipR = sd.addUGen('Clip', AUDIO,
     [sd.ref(pan2, 1), Cn1, C1], 1);
 
-  // ── out_bus <= 0 (condition for Select) ─────────────────────────────────────
+  // ── out_bus <= 0 ────────────────────────────────────────────────────────────
   const lte = sd.addUGen('BinaryOpUGen', CONTROL,
     [krRef(PI_OUT_BUS), C0], 1, B_LTE);
 
@@ -288,23 +312,110 @@ function buildOscSynthDef(config) {
   return sd.toBuffer();
 }
 
-// ── Define all 3 oscillators ─────────────────────────────────────────────────
+// ── Define all oscillators ───────────────────────────────────────────────────
 
 const OSCILLATORS = [
+  // === Basic waveforms ===
   {
     name: 'saw_osc',
     oscUGen: 'Saw',
-    hasWidth: false,
+    params: [
+      { name: 'freq', default: 440, kind: 'osc', modName: 'freq_mod' },
+      { name: 'amp',  default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
   },
   {
     name: 'pulse_osc',
     oscUGen: 'Pulse',
-    hasWidth: true,
+    params: [
+      { name: 'freq',  default: 440, kind: 'osc', modName: 'freq_mod' },
+      { name: 'amp',   default: 0.5, kind: 'amp', modName: 'amp_mod' },
+      { name: 'width', default: 0.5, kind: 'osc', modName: 'width_mod', clamp: [0, 1] },
+    ],
   },
   {
     name: 'tri_osc',
     oscUGen: 'LFTri',
-    hasWidth: false,
+    params: [
+      { name: 'freq', default: 440, kind: 'osc', modName: 'freq_mod' },
+      { name: 'amp',  default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  // === Harmonic oscillators ===
+  {
+    name: 'blip_osc',
+    oscUGen: 'Blip',
+    params: [
+      { name: 'freq',    default: 440, kind: 'osc', modName: 'freq_mod' },
+      { name: 'amp',     default: 0.5, kind: 'amp', modName: 'amp_mod' },
+      { name: 'numharm', default: 20,  kind: 'osc', modName: 'numharm_mod', clamp: [1, 200] },
+    ],
+  },
+  {
+    name: 'formant_osc',
+    oscUGen: 'Formant',
+    params: [
+      { name: 'freq',     default: 440,  kind: 'osc', modName: 'freq_mod' },
+      { name: 'amp',      default: 0.5,  kind: 'amp', modName: 'amp_mod' },
+      { name: 'formfreq', default: 1760, kind: 'osc', modName: 'formfreq_mod' },
+      { name: 'bwfreq',   default: 880,  kind: 'osc', modName: 'bwfreq_mod' },
+    ],
+  },
+  // === Noise generators ===
+  {
+    name: 'dust',
+    oscUGen: 'Dust',
+    params: [
+      { name: 'density', default: 1,   kind: 'osc', modName: 'density_mod', clamp: [0] },
+      { name: 'amp',     default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  {
+    name: 'crackle',
+    oscUGen: 'Crackle',
+    params: [
+      { name: 'chaos', default: 1.5, kind: 'osc', modName: 'chaos_mod', clamp: [1, 2] },
+      { name: 'amp',   default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  {
+    name: 'white_noise',
+    oscUGen: 'WhiteNoise',
+    params: [
+      { name: 'amp', default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  {
+    name: 'pink_noise',
+    oscUGen: 'PinkNoise',
+    params: [
+      { name: 'amp', default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  // === LF random (modulation sources) ===
+  {
+    name: 'lfnoise0',
+    oscUGen: 'LFNoise0',
+    params: [
+      { name: 'freq', default: 4,   kind: 'osc', modName: 'freq_mod', clamp: [0.01] },
+      { name: 'amp',  default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  {
+    name: 'lfnoise1',
+    oscUGen: 'LFNoise1',
+    params: [
+      { name: 'freq', default: 4,   kind: 'osc', modName: 'freq_mod', clamp: [0.01] },
+      { name: 'amp',  default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
+  },
+  {
+    name: 'lfnoise2',
+    oscUGen: 'LFNoise2',
+    params: [
+      { name: 'freq', default: 4,   kind: 'osc', modName: 'freq_mod', clamp: [0.01] },
+      { name: 'amp',  default: 0.5, kind: 'amp', modName: 'amp_mod' },
+    ],
   },
 ];
 
