@@ -774,6 +774,7 @@ const PORT_SPACING = 22;
 
 function getNodeWidth(node) {
   if (node.type === 'bang') return (node.bangSize || 60) + 16;
+  if (node.scriptWidth != null) return node.scriptWidth;
   return NODE_SCHEMA[node.type]?.width || NODE_W;
 }
 
@@ -2177,6 +2178,36 @@ export default function GridView() {
     window.addEventListener('mouseup', onUp);
   }, []);
 
+  // ── Script module resize (drag from corner) ─────────────
+  const scriptResizing = useRef(null); // { nodeId, startX, startWidth }
+  const handleScriptResizeStart = useCallback((e, nodeId, currentWidth) => {
+    e.stopPropagation();
+    e.preventDefault();
+    scriptResizing.current = {
+      nodeId,
+      startX: e.clientX,
+      startWidth: currentWidth,
+    };
+
+    const onMove = (me) => {
+      const info = scriptResizing.current;
+      if (!info) return;
+      const delta = me.clientX - info.startX;
+      const newWidth = Math.max(140, Math.min(400, info.startWidth + delta));
+      setNodes((prev) => ({
+        ...prev,
+        [info.nodeId]: { ...prev[info.nodeId], scriptWidth: newWidth },
+      }));
+    };
+    const onUp = () => {
+      scriptResizing.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
   // ── Save patch to JSON file ─────────────────────────────
   const handleSavePatch = useCallback(() => {
     const patch = {
@@ -2195,6 +2226,7 @@ export default function GridView() {
         };
         if (node.code != null) entry.code = node.code;
         if (node.numOutputs != null && node.numOutputs > 1) entry.numOutputs = node.numOutputs;
+        if (node.scriptWidth != null) entry.scriptWidth = node.scriptWidth;
         if (node.quantize) entry.quantize = true;
         if (node.breakpoints) entry.breakpoints = node.breakpoints;
         if (node.curves) entry.curves = node.curves;
@@ -2293,6 +2325,7 @@ export default function GridView() {
           };
           if (n.code != null) restoredNodes[n.id].code = n.code;
           if (n.numOutputs != null) restoredNodes[n.id].numOutputs = n.numOutputs;
+          if (n.scriptWidth != null) restoredNodes[n.id].scriptWidth = n.scriptWidth;
           if (n.quantize) restoredNodes[n.id].quantize = true;
           if (n.breakpoints) restoredNodes[n.id].breakpoints = n.breakpoints;
           if (n.curves) restoredNodes[n.id].curves = n.curves;
@@ -2449,7 +2482,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle') || e.target.closest('.script-resize-handle')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2688,7 +2721,7 @@ export default function GridView() {
     const isEnvelope = node.type === 'envelope';
     const isBang = node.type === 'bang';
     const isMidiIn = node.type === 'midi_in';
-    const nodeWidth = schema.width || NODE_W;
+    const nodeWidth = getNodeWidth(node);
 
     // Check if this module has any modulation output connections
     // (control/script for control-rate, or any audio source for audio-rate)
@@ -2990,6 +3023,15 @@ export default function GridView() {
           >
             <code>{(node.code || '').split('\n').slice(0, 3).join('\n') || 'Click to edit…'}</code>
           </div>
+        )}
+
+        {/* Script resize handle */}
+        {isScript && (
+          <div
+            className="script-resize-handle"
+            onMouseDown={(e) => handleScriptResizeStart(e, node.id, getNodeWidth(node))}
+            title="Drag to resize"
+          />
         )}
 
         {/* Live indicator */}
