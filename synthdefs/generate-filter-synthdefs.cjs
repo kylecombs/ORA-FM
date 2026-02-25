@@ -2,8 +2,8 @@
 /**
  * generate-filter-synthdefs.js
  *
- * Generates .scsyndef binary files for 8 filter synths:
- * lpf, hpf, bpf, brf, rlpf, rhpf, moog, moogff
+ * Generates .scsyndef binary files for filter and delay synths:
+ * lpf, hpf, bpf, brf, rlpf, rhpf, moog, moogff, resonz, comb
  *
  * Used when sclang is not available in the build environment.
  * SuperCollider SynthDef v2 file format:
@@ -440,7 +440,139 @@ const FILTERS = [
     hasBw: false,
     hasGain: true, gainDefault: 1,
   },
+  {
+    name: 'resonz',
+    filterUGen: 'Resonz',
+    cutoffDefault: 1000,
+    hasRes: false,
+    hasBw: true, bwDefault: 0.5,
+    hasGain: false,
+  },
 ];
+
+// ── Comb Filter SynthDef builder ─────────────────────────────────────────────
+//
+// CombC delay filter — different parameter structure from frequency filters.
+//
+// Parameters (all kr unless noted):
+//   in_bus        - input audio bus
+//   out_bus       - output audio bus
+//   delaytime     - delay time in seconds (sets comb pitch ≈ 1/delaytime Hz)
+//   decaytime     - 60 dB decay time in seconds
+//   mix           - dry/wet 0..1
+//   delaytime_mod (ar) - audio-rate delay modulation
+//   decaytime_mod (ar) - audio-rate decay modulation
+//
+// Signal flow:
+//   In.ar(in_bus, 2) → [dry_L, dry_R]
+//   finalDelay = clip(delaytime + delaytime_mod, 0.0001, 1.0)
+//   finalDecay = clip(decaytime + decaytime_mod, 0.01, 20)
+//   wet = CombC.ar(dry, 1.0, finalDelay, finalDecay)
+//   pan = mix * 2 - 1
+//   out = XFade2.ar(dry, wet, pan)
+//   safe = Select(out_bus <= 0, [out, clip(out)])
+//   Out.ar(out_bus, safe)
+
+function buildCombSynthDef() {
+  const sd = new SynthDef('comb');
+
+  // ── Constants ──────────────────────────────────────────────────────────────
+  const C0     = sd.const(0);
+  const C1     = sd.const(1);
+  const Cn1    = sd.const(-1);
+  const C2     = sd.const(2);
+  const C0001  = sd.const(0.0001);  // min delay time
+  const C1_0   = C1;                // max delay time (reuse constant 1.0)
+  const C001   = sd.const(0.01);    // min decay time
+  const C20    = sd.const(20);      // max decay time
+
+  // ── Parameters ─────────────────────────────────────────────────────────────
+  const PI_IN_BUS    = sd.addParam('in_bus',    0);
+  const PI_OUT_BUS   = sd.addParam('out_bus',   0);
+  const PI_DELAYTIME = sd.addParam('delaytime', 0.2);
+  const PI_DECAYTIME = sd.addParam('decaytime', 1.0);
+  const PI_MIX       = sd.addParam('mix',       0.5);
+
+  // Audio-rate params
+  const PI_DELAYTIME_MOD = sd.params.length;
+  sd.addParam('delaytime_mod', 0);
+  const PI_DECAYTIME_MOD = sd.params.length;
+  sd.addParam('decaytime_mod', 0);
+
+  // ── UGens ──────────────────────────────────────────────────────────────────
+  const krParamCount = PI_DELAYTIME_MOD; // 5 kr params before ar ones
+
+  // Individual Control UGens for each kr param
+  const ctrlUgens = [];
+  for (let i = 0; i < krParamCount; i++) {
+    ctrlUgens.push(sd.addUGen('Control', CONTROL, [], 1, i));
+  }
+
+  // Individual AudioControl UGens for each ar param
+  const arParamCount = sd.params.length - krParamCount;
+  const arCtrlUgens = [];
+  for (let i = 0; i < arParamCount; i++) {
+    arCtrlUgens.push(sd.addUGen('AudioControl', AUDIO, [], 1, krParamCount + i));
+  }
+
+  function krRef(paramIdx) { return sd.ref(ctrlUgens[paramIdx], 0); }
+  function arRef(paramIdx) {
+    return sd.ref(arCtrlUgens[paramIdx - krParamCount], 0);
+  }
+
+  // ── In.ar(in_bus, 2) → stereo ──────────────────────────────────────────────
+  const inUgen = sd.addUGen('In', AUDIO, [krRef(PI_IN_BUS)], 2);
+  const dryL = sd.ref(inUgen, 0);
+  const dryR = sd.ref(inUgen, 1);
+
+  // ── finalDelay = clip(delaytime + delaytime_mod, 0.0001, 1.0) ─────────────
+  const addDelay = sd.addUGen('BinaryOpUGen', AUDIO, [
+    krRef(PI_DELAYTIME), arRef(PI_DELAYTIME_MOD)
+  ], 1, B_ADD);
+  const finalDelay = sd.addUGen('Clip', AUDIO, [
+    sd.ref(addDelay, 0), C0001, C1_0
+  ], 1);
+
+  // ── finalDecay = clip(decaytime + decaytime_mod, 0.01, 20) ────────────────
+  const addDecay = sd.addUGen('BinaryOpUGen', AUDIO, [
+    krRef(PI_DECAYTIME), arRef(PI_DECAYTIME_MOD)
+  ], 1, B_ADD);
+  const finalDecay = sd.addUGen('Clip', AUDIO, [
+    sd.ref(addDecay, 0), C001, C20
+  ], 1);
+
+  // ── CombC.ar(in, maxdelaytime=1.0, delaytime, decaytime) ──────────────────
+  const wetL = sd.addUGen('CombC', AUDIO, [
+    dryL, C1_0, sd.ref(finalDelay, 0), sd.ref(finalDecay, 0)
+  ], 1);
+  const wetR = sd.addUGen('CombC', AUDIO, [
+    dryR, C1_0, sd.ref(finalDelay, 0), sd.ref(finalDecay, 0)
+  ], 1);
+
+  // ── XFade2 for dry/wet mix ────────────────────────────────────────────────
+  const mixRef = krRef(PI_MIX);
+  const mixTimes2 = sd.addUGen('BinaryOpUGen', CONTROL, [mixRef, C2], 1, B_MUL);
+  const pan = sd.addUGen('BinaryOpUGen', CONTROL, [sd.ref(mixTimes2, 0), C1], 1, B_SUB);
+  const panRef = sd.ref(pan, 0);
+
+  const outL = sd.addUGen('XFade2', AUDIO, [dryL, sd.ref(wetL, 0), panRef, C1], 1);
+  const outR = sd.addUGen('XFade2', AUDIO, [dryR, sd.ref(wetR, 0), panRef, C1], 1);
+
+  // ── Safety clip for bus 0 ─────────────────────────────────────────────────
+  const clipL = sd.addUGen('Clip', AUDIO, [sd.ref(outL, 0), Cn1, C1], 1);
+  const clipR = sd.addUGen('Clip', AUDIO, [sd.ref(outR, 0), Cn1, C1], 1);
+
+  const outBusRef = krRef(PI_OUT_BUS);
+  const lteZero = sd.addUGen('BinaryOpUGen', CONTROL, [outBusRef, C0], 1, B_LTE);
+  const lteRef = sd.ref(lteZero, 0);
+
+  const selL = sd.addUGen('Select', AUDIO, [lteRef, sd.ref(outL, 0), sd.ref(clipL, 0)], 1);
+  const selR = sd.addUGen('Select', AUDIO, [lteRef, sd.ref(outR, 0), sd.ref(clipR, 0)], 1);
+
+  sd.addUGen('Out', AUDIO, [outBusRef, sd.ref(selL, 0), sd.ref(selR, 0)], 0);
+
+  return sd.toBuffer();
+}
 
 // ── Generate and write all synthdefs ─────────────────────────────────────────
 
@@ -457,6 +589,18 @@ for (const spec of FILTERS) {
     console.error(`  ${spec.name}.scsyndef … FAILED: ${e.message}`);
     fail++;
   }
+}
+
+// Generate comb filter (separate builder)
+try {
+  const buf = buildCombSynthDef();
+  const outPath = path.join(OUT_DIR, 'comb.scsyndef');
+  fs.writeFileSync(outPath, buf);
+  console.log(`  comb.scsyndef … ok (${buf.length} bytes)`);
+  ok++;
+} catch (e) {
+  console.error(`  comb.scsyndef … FAILED: ${e.message}`);
+  fail++;
 }
 
 console.log(`\nDone: ${ok} succeeded, ${fail} failed.`);
