@@ -20,6 +20,8 @@
 //    random(min, max)             — random float
 //    randomInt(min, max)          — random integer
 //    log(…args)                   — print to console
+//    note('C#3')                  — parse note name → MIDI number
+//    C4, Cs4, Db4, …              — bare MIDI note constants (C0–G9)
 //    r                            — rest (skip a subdivision)
 //    _                            — tie (extend previous note)
 //    Math                         — standard Math object
@@ -28,6 +30,36 @@
 // Sentinel symbols for rest and tie — exposed as bare identifiers r and _
 const REST = Symbol('rest');
 const TIE  = Symbol('tie');
+
+// ── MIDI note name constants ─────────────────────────────
+// Generated once at module load. Provides bare identifiers like C4 (60),
+// Cs4 (61), Db4 (61), etc. Injected into user code as const declarations.
+// Convention: C4 = 60 (middle C), so MIDI = (octave + 1) * 12 + semitone.
+const _SHARP_NAMES = ['C','Cs','D','Ds','E','F','Fs','G','Gs','A','As','B'];
+const _FLAT_NAMES  = [null,'Db',null,'Eb',null,null,'Gb',null,'Ab',null,'Bb',null];
+const _NOTE_CONSTS = (() => {
+  const parts = [];
+  for (let oct = 0; oct <= 9; oct++) {
+    for (let semi = 0; semi < 12; semi++) {
+      const midi = (oct + 1) * 12 + semi;
+      if (midi > 127) break;
+      parts.push(`${_SHARP_NAMES[semi]}${oct}=${midi}`);
+      if (_FLAT_NAMES[semi]) parts.push(`${_FLAT_NAMES[semi]}${oct}=${midi}`);
+    }
+  }
+  return 'const ' + parts.join(',') + ';';
+})();
+
+// Lookup table for note() function — maps semitone name → offset
+const _SEMI_MAP = {
+  'C':0,'B#':0,'Cs':1,'C#':1,'Db':1,
+  'D':2,'Ds':3,'D#':3,'Eb':3,
+  'E':4,'Fb':4,'Es':5,'E#':5,'F':5,
+  'Fs':6,'F#':6,'Gb':6,
+  'G':7,'Gs':8,'G#':8,'Ab':8,
+  'A':9,'As':10,'A#':10,'Bb':10,
+  'B':11,'Cb':11,
+};
 
 export class ScriptRunner {
   constructor({ onOutput, onLog, onSetOutputs }) {
@@ -188,6 +220,20 @@ export class ScriptRunner {
       return Math.floor(random(min, max + 1));
     }
 
+    // note('C#3') → 49  — parse a string note name to MIDI number
+    function note(name) {
+      if (typeof name === 'number') return name;
+      const str = String(name).trim();
+      const m = str.match(/^([A-Ga-g][#sb]?)(-?\d+)$/);
+      if (!m) { log('note: invalid name "' + str + '"'); return 0; }
+      let notePart = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      const oct = parseInt(m[2], 10);
+      const semi = _SEMI_MAP[notePart];
+      if (semi === undefined) { log('note: unknown note "' + notePart + '"'); return 0; }
+      const midi = (oct + 1) * 12 + semi;
+      return Math.max(0, Math.min(127, midi));
+    }
+
     // ── Nested tuplet helpers ───────────────────────────
     // w(weight, content) — tag a subdivision with a relative weight
     function w(weight, content) {
@@ -288,17 +334,17 @@ export class ScriptRunner {
     // named API bindings and runs the user code.
     const apiNames = [
       'setOutputs', 'out', 'log', 'pattern', 'routine', 'lfo', 'ramp',
-      'random', 'randomInt', 'tuplet', 'w', 'r', '_', 'Math',
+      'random', 'randomInt', 'tuplet', 'w', 'r', '_', 'Math', 'note',
     ];
     const apiValues = [
       setOutputs, out, log, pattern, routine, lfo, ramp,
-      random, randomInt, tuplet, w, REST, TIE, Math,
+      random, randomInt, tuplet, w, REST, TIE, Math, note,
     ];
 
     try {
       // Use 'use strict' to prevent accidental globals.
       // Wrap in an async function to allow top-level await if needed.
-      const fn = new Function(...apiNames, `'use strict';\n${code}`);
+      const fn = new Function(...apiNames, `'use strict';\n${_NOTE_CONSTS}\n${code}`);
       fn(...apiValues);
       log('Script started');
     } catch (err) {
