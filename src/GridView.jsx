@@ -1416,6 +1416,20 @@ export default function GridView() {
       }
     }
 
+    // ── 4b. Pre-compute control-rate modulated params ──
+    // We must NOT send /n_set for params mapped to a control bus via /n_map,
+    // because /n_set breaks the bus mapping, causing a momentary value
+    // discontinuity (audible as a click/pop).
+    const controlMappedParams = new Set();
+    for (const conn of connections) {
+      if (!conn.toParam || conn.isAudioRate) continue;
+      const sourceNode = nodes[conn.fromNodeId];
+      const sourceSchema = NODE_SCHEMA[sourceNode?.type];
+      if (sourceSchema?.category === 'control' || sourceSchema?.category === 'script') {
+        controlMappedParams.add(`${conn.toNodeId}:${conn.toParam}`);
+      }
+    }
+
     // ── 5. Stop nodes that should not be playing ──
     for (const id of Object.keys(nodes)) {
       const nid = parseInt(id);
@@ -1475,9 +1489,14 @@ export default function GridView() {
       } else {
         engine.setParam(id, 'pan', pan);
         engine.setParam(id, 'out_bus', routing.effectiveOutBus);
-        // Always sync amp: scaled for modulators, raw UI value for non-modulators
-        // (ensures amp reverts when a mod cable is disconnected).
-        engine.setParam(id, 'amp', ampToSend);
+        // Only send /n_set for amp if it's NOT control-bus-mapped.
+        // Sending /n_set on a mapped param breaks the /n_map binding,
+        // causing a momentary value jump (audible click).
+        // When the mod cable is disconnected, the unmap section (step 10)
+        // restores the base value.
+        if (!controlMappedParams.has(`${id}:amp`)) {
+          engine.setParam(id, 'amp', ampToSend);
+        }
       }
     }
 
@@ -1511,9 +1530,11 @@ export default function GridView() {
           });
         }
       } else {
-        // Update FX params and routing
+        // Update FX params and routing (skip control-bus-mapped params)
         for (const [k, v] of Object.entries(node.params)) {
-          engine.setParam(id, k, v);
+          if (!controlMappedParams.has(`${id}:${k}`)) {
+            engine.setParam(id, k, v);
+          }
         }
         // Also update routing params dynamically (in_bus and out_bus can be changed via /n_set)
         if (routing.inBus != null) {
