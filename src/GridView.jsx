@@ -93,6 +93,164 @@ const NODE_SCHEMA = {
       phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
     },
   },
+  saw_osc: {
+    label: 'Saw Osc',
+    desc: 'modulatable saw',
+    accent: '#b89a6a',
+    synthDef: 'saw_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:  { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
+  pulse_osc: {
+    label: 'Pulse Osc',
+    desc: 'modulatable pulse',
+    accent: '#b89a6a',
+    synthDef: 'pulse_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'width'],
+    params: {
+      freq:  { label: 'freq',  min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      width: { label: 'width', min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
+  tri_osc: {
+    label: 'Tri Osc',
+    desc: 'modulatable triangle',
+    accent: '#b89a6a',
+    synthDef: 'tri_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:  { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
+  blip_osc: {
+    label: 'Blip',
+    desc: 'harmonic impulse',
+    accent: '#b89a6a',
+    synthDef: 'blip_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'numharm'],
+    params: {
+      freq:    { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:     { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      numharm: { label: 'harm', min: 1,   max: 200,   step: 1,    val: 20 },
+    },
+  },
+  formant_osc: {
+    label: 'Formant',
+    desc: 'vocal formant',
+    accent: '#8ab0c8',
+    synthDef: 'formant_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'formfreq', 'bwfreq'],
+    params: {
+      freq:     { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:      { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      formfreq: { label: 'form', min: 0.1, max: 20000, step: 1,    val: 1760 },
+      bwfreq:   { label: 'bw',   min: 0.1, max: 20000, step: 1,    val: 880 },
+    },
+  },
+  dust_osc: {
+    label: 'Dust',
+    desc: 'random impulses',
+    accent: '#c08880',
+    synthDef: 'dust',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['density', 'amp'],
+    params: {
+      density: { label: 'dens', min: 0.1, max: 1000, step: 0.1, val: 1 },
+      amp:     { label: 'amp',  min: 0,   max: 1,    step: 0.01, val: 0.5 },
+    },
+  },
+  crackle_osc: {
+    label: 'Crackle',
+    desc: 'chaotic noise',
+    accent: '#c08880',
+    synthDef: 'crackle',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['chaos', 'amp'],
+    params: {
+      chaos: { label: 'chaos', min: 1, max: 2, step: 0.01, val: 1.5 },
+      amp:   { label: 'amp',   min: 0, max: 1, step: 0.01, val: 0.5 },
+    },
+  },
+  lfnoise0_osc: {
+    label: 'LFNoise0',
+    desc: 'stepped random',
+    accent: '#7aab88',
+    synthDef: 'lfnoise0',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'rate', min: 0.01, max: 1000, step: 0.01, val: 4 },
+      amp:  { label: 'amp',  min: 0,    max: 1,    step: 0.01, val: 0.5 },
+    },
+  },
+  lfnoise1_osc: {
+    label: 'LFNoise1',
+    desc: 'linear random',
+    accent: '#7aab88',
+    synthDef: 'lfnoise1',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'rate', min: 0.01, max: 1000, step: 0.01, val: 4 },
+      amp:  { label: 'amp',  min: 0,    max: 1,    step: 0.01, val: 0.5 },
+    },
+  },
+  lfnoise2_osc: {
+    label: 'LFNoise2',
+    desc: 'smooth random',
+    accent: '#7aab88',
+    synthDef: 'lfnoise2',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'rate', min: 0.01, max: 1000, step: 0.01, val: 4 },
+      amp:  { label: 'amp',  min: 0,    max: 1,    step: 0.01, val: 0.5 },
+    },
+  },
+  white_noise_osc: {
+    label: 'White Noise',
+    desc: 'white noise',
+    accent: '#c08880',
+    synthDef: 'white_noise',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['amp'],
+    params: {
+      amp: { label: 'amp', min: 0, max: 1, step: 0.01, val: 0.5 },
+    },
+  },
+  pink_noise_osc: {
+    label: 'Pink Noise',
+    desc: 'pink 1/f',
+    accent: '#c08880',
+    synthDef: 'pink_noise',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['amp'],
+    params: {
+      amp: { label: 'amp', min: 0, max: 1, step: 0.01, val: 0.5 },
+    },
+  },
   saw: {
     label: 'Saw',
     desc: 'sawtooth',
@@ -490,9 +648,15 @@ function getParamPortPos(node, schema, paramKey) {
 // These factors scale the modulator's amp so that the default slider value
 // (0.5) produces meaningful modulation depth for each parameter type.
 const MOD_DEPTH_SCALES = {
-  freq:  400,    // amp 0.5 → ±200 Hz frequency deviation (audible FM)
-  amp:   1,      // amp 0.5 → ±0.5 amplitude modulation (full-depth AM)
-  phase: 6.283,  // amp 0.5 → ±π radians phase modulation (full PM)
+  freq:     400,    // amp 0.5 → ±200 Hz frequency deviation (audible FM)
+  amp:      1,      // amp 0.5 → ±0.5 amplitude modulation (full-depth AM)
+  phase:    6.283,  // amp 0.5 → ±π radians phase modulation (full PM)
+  width:    1,      // amp 0.5 → ±0.5 pulse width modulation (full PWM)
+  numharm:  40,     // amp 0.5 → ±20 harmonics variation (timbral FM)
+  formfreq: 400,    // amp 0.5 → ±200 Hz formant deviation
+  bwfreq:   400,    // amp 0.5 → ±200 Hz bandwidth deviation
+  density:  20,     // amp 0.5 → ±10 impulses/sec density variation
+  chaos:    0.5,    // amp 0.5 → ±0.25 chaos param deviation (range 1–2)
 };
 
 // ── Compute which nodes are "live" (reachable from AudioOut) ──
