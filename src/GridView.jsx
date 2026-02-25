@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
 import { ScriptRunner } from './audio/scriptRunner';
 import { EnvelopeRunner } from './audio/envelopeRunner';
+import { MidiListener, getInputDevices, onDeviceChange, initMidi } from './audio/midiListener';
 import BreakpointEditor from './BreakpointEditor';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -361,6 +362,18 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 1, step: 1, val: 0, hidden: true },
     },
   },
+  midi_in: {
+    label: 'MIDI In',
+    desc: 'midi controller',
+    accent: '#7a9fc8',
+    synthDef: null,
+    category: 'control',
+    inputs: [],
+    outputs: ['out'],
+    params: {
+      value: { label: 'val', min: 0, max: 127, step: 1, val: 0, hidden: true },
+    },
+  },
   envelope: {
     label: 'Envelope',
     desc: 'breakpoint editor',
@@ -434,7 +447,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant', 'envelope', 'bang'],
+    types: ['constant', 'envelope', 'bang', 'midi_in'],
   },
 ];
 
@@ -825,6 +838,11 @@ export default function GridView() {
   const printConsoleRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  // MIDI state
+  const midiListenersRef = useRef(new Map()); // nodeId → MidiListener
+  const [midiDevices, setMidiDevices] = useState([]); // available MIDI input devices
+  const [midiActivity, setMidiActivity] = useState({}); // nodeId → last activity timestamp
+
   // Scope (oscilloscope) state — ring buffer per scope node
   const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array ring buffer
   const scopeWriteIdxRef = useRef(new Map()); // nodeId → write index
@@ -919,12 +937,91 @@ export default function GridView() {
       });
     });
 
+    // Initialize MIDI access
+    initMidi().then((ok) => {
+      if (ok) setMidiDevices(getInputDevices());
+    });
+    const unsubDevices = onDeviceChange((devices) => setMidiDevices(devices));
+
     return () => {
       engineRef.current?.stopAll();
       scriptRunnerRef.current?.stopAll();
       envelopeRunnerRef.current?.stopAll();
+      // Stop all MIDI listeners
+      for (const listener of midiListenersRef.current.values()) {
+        listener.stop();
+      }
+      midiListenersRef.current.clear();
+      unsubDevices();
     };
   }, []);
+
+  // ── MIDI listener lifecycle ──────────────────────────────
+  // Create/update/destroy MidiListeners as midi_in nodes change
+  useEffect(() => {
+    const listeners = midiListenersRef.current;
+    const midiNodeIds = new Set();
+
+    for (const [id, node] of Object.entries(nodes)) {
+      if (node.type !== 'midi_in') continue;
+      const nodeId = Number(id);
+      midiNodeIds.add(nodeId);
+
+      let listener = listeners.get(nodeId);
+      if (!listener) {
+        // Create new listener for this node
+        listener = new MidiListener({
+          mode: node.midiMode || 'cc',
+          channel: node.midiChannel ?? 0,
+          ccNumber: node.midiCcNumber ?? 1,
+          deviceId: node.midiDeviceId || null,
+          onValue: (value) => {
+            setNodes((prev) => {
+              const n = prev[nodeId];
+              if (!n) return prev;
+              return {
+                ...prev,
+                [nodeId]: { ...n, params: { ...n.params, value } },
+              };
+            });
+            setMidiActivity((prev) => ({ ...prev, [nodeId]: Date.now() }));
+          },
+          onNote: (note, velocity) => {
+            setNodes((prev) => {
+              const n = prev[nodeId];
+              if (!n) return prev;
+              return {
+                ...prev,
+                [nodeId]: {
+                  ...n,
+                  params: { ...n.params, value: note },
+                  midiLastNote: note,
+                  midiGate: velocity > 0 ? 1 : 0,
+                },
+              };
+            });
+            setMidiActivity((prev) => ({ ...prev, [nodeId]: Date.now() }));
+          },
+        });
+        listeners.set(nodeId, listener);
+        listener.start();
+      } else {
+        // Update existing listener config
+        listener.setMode(node.midiMode || 'cc');
+        listener.setChannel(node.midiChannel ?? 0);
+        listener.setCcNumber(node.midiCcNumber ?? 1);
+        listener.setDeviceId(node.midiDeviceId || null);
+      }
+    }
+
+    // Remove listeners for deleted nodes
+    for (const [nodeId, listener] of listeners) {
+      if (!midiNodeIds.has(nodeId)) {
+        listener.stop();
+        listeners.delete(nodeId);
+      }
+    }
+  }, [nodes]);
 
   // ── Sync audio with live node set & bus routing ──────
   const prevRoutingRef = useRef({}); // nodeId → { inBus, outBus }
@@ -1418,6 +1515,14 @@ export default function GridView() {
     if (type === 'bang') {
       node.bangSize = 60;
     }
+    if (type === 'midi_in') {
+      node.midiMode = 'cc';       // 'cc' or 'note'
+      node.midiChannel = 0;       // 0 = omni, 1-16 = specific
+      node.midiCcNumber = 1;      // CC number (0-127)
+      node.midiDeviceId = null;   // null = any device
+      node.midiLastNote = null;   // last received note number
+      node.midiGate = 0;          // note on/off state
+    }
     if (type === 'print') {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
@@ -1444,6 +1549,12 @@ export default function GridView() {
       envelopeRunnerRef.current?.stop(id);
       scopeBuffersRef.current.delete(id);
       scopeWriteIdxRef.current.delete(id);
+      // Stop MIDI listener if this was a midi_in node
+      const midiListener = midiListenersRef.current.get(id);
+      if (midiListener) {
+        midiListener.stop();
+        midiListenersRef.current.delete(id);
+      }
       setRunningScripts((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -1715,6 +1826,10 @@ export default function GridView() {
         if (node.printColor != null) entry.printColor = node.printColor;
         if (node.bangSize != null) entry.bangSize = node.bangSize;
         if (node.scopeMode != null) entry.scopeMode = node.scopeMode;
+        if (node.midiMode != null) entry.midiMode = node.midiMode;
+        if (node.midiChannel != null) entry.midiChannel = node.midiChannel;
+        if (node.midiCcNumber != null) entry.midiCcNumber = node.midiCcNumber;
+        if (node.midiDeviceId != null) entry.midiDeviceId = node.midiDeviceId;
         return entry;
       }),
       connections: connections.map((c) => {
@@ -1771,10 +1886,16 @@ export default function GridView() {
         }
         scriptRunnerRef.current?.stopAll?.();
         envelopeRunnerRef.current?.stopAll?.();
+        // Stop all MIDI listeners
+        for (const listener of midiListenersRef.current.values()) {
+          listener.stop();
+        }
+        midiListenersRef.current.clear();
         setRunningScripts(new Set());
         setRunningEnvelopes(new Set());
         setPrintLogs([]);
         setSelectedNodeId(null);
+        setMidiActivity({});
         scopeBuffersRef.current.clear();
         scopeWriteIdxRef.current.clear();
 
@@ -1802,6 +1923,10 @@ export default function GridView() {
           if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
           if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
           if (n.scopeMode != null) restoredNodes[n.id].scopeMode = n.scopeMode;
+          if (n.midiMode != null) restoredNodes[n.id].midiMode = n.midiMode;
+          if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
+          if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
+          if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
         }
 
         // Restore connections
@@ -2180,6 +2305,7 @@ export default function GridView() {
     const isScript = schema.category === 'script';
     const isEnvelope = node.type === 'envelope';
     const isBang = node.type === 'bang';
+    const isMidiIn = node.type === 'midi_in';
     const nodeWidth = schema.width || NODE_W;
 
     // Check if this module has any modulation output connections
@@ -2212,7 +2338,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2394,6 +2520,28 @@ export default function GridView() {
               </button>
             </div>
           </>
+        )}
+
+        {/* MIDI input display */}
+        {isMidiIn && (
+          <div
+            className="midi-in-body"
+            onClick={() => setSelectedNodeId(node.id)}
+            title="Click to configure MIDI input"
+          >
+            <div className="midi-in-mode-badge">
+              {node.midiMode === 'note' ? 'NOTE' : `CC ${node.midiCcNumber}`}
+            </div>
+            <div className="midi-in-value">
+              {(node.params.value ?? 0).toFixed(0)}
+            </div>
+            <div className="midi-in-channel">
+              {node.midiChannel === 0 ? 'omni' : `ch ${node.midiChannel}`}
+            </div>
+            {(Date.now() - (midiActivity[node.id] || 0)) < 300 && (
+              <div className="midi-in-activity" />
+            )}
+          </div>
         )}
 
         {/* Parameters (skip hidden params, skip for envelope) */}
@@ -2859,6 +3007,129 @@ export default function GridView() {
                           Connect a signal source to visualize the waveform.
                           Displays values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.
                         </div>
+                      </div>
+                    </div>
+                  ) : selNode.type === 'midi_in' ? (
+                    <div className="details-body">
+                      <div className="midi-details">
+                        {/* Mode selector: CC or Note */}
+                        <div className="midi-option">
+                          <span className="midi-label">Mode</span>
+                          <div className="midi-mode-toggle-group">
+                            <button
+                              className={`midi-mode-choice${(selNode.midiMode || 'cc') === 'cc' ? ' active' : ''}`}
+                              onClick={() => setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], midiMode: 'cc' },
+                              }))}
+                            >
+                              CC
+                            </button>
+                            <button
+                              className={`midi-mode-choice${(selNode.midiMode || 'cc') === 'note' ? ' active' : ''}`}
+                              onClick={() => setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], midiMode: 'note' },
+                              }))}
+                            >
+                              Note
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* CC Number (only in CC mode) */}
+                        {(selNode.midiMode || 'cc') === 'cc' && (
+                          <div className="midi-option">
+                            <span className="midi-label">CC #</span>
+                            <input
+                              type="number"
+                              className="midi-cc-input"
+                              min={0}
+                              max={127}
+                              value={selNode.midiCcNumber ?? 1}
+                              onChange={(e) => {
+                                const v = Math.max(0, Math.min(127, parseInt(e.target.value) || 0));
+                                setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: { ...prev[selNode.id], midiCcNumber: v },
+                                }));
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        {/* Channel selector */}
+                        <div className="midi-option">
+                          <span className="midi-label">Channel</span>
+                          <select
+                            className="midi-channel-select"
+                            value={selNode.midiChannel ?? 0}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value);
+                              setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], midiChannel: v },
+                              }));
+                            }}
+                          >
+                            <option value={0}>Omni (all)</option>
+                            {Array.from({ length: 16 }, (_, i) => (
+                              <option key={i + 1} value={i + 1}>
+                                Channel {i + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Device selector */}
+                        <div className="midi-option">
+                          <span className="midi-label">Device</span>
+                          <select
+                            className="midi-device-select"
+                            value={selNode.midiDeviceId || ''}
+                            onChange={(e) => {
+                              const v = e.target.value || null;
+                              setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], midiDeviceId: v },
+                              }));
+                            }}
+                          >
+                            <option value="">Any device</option>
+                            {midiDevices.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Current value display */}
+                        <div className="midi-value-display">
+                          <span className="midi-value-label">Output</span>
+                          <span className="midi-value-num">
+                            {(selNode.params.value ?? 0).toFixed(0)}
+                          </span>
+                          {selNode.midiMode === 'note' && selNode.midiLastNote != null && (
+                            <span className="midi-note-info">
+                              {NOTE_NAMES[((selNode.midiLastNote % 12) + 12) % 12]}
+                              {Math.floor(selNode.midiLastNote / 12) - 1}
+                              {selNode.midiGate ? ' ON' : ' OFF'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="midi-hint">
+                          {(selNode.midiMode || 'cc') === 'cc'
+                            ? `Outputs CC ${selNode.midiCcNumber ?? 1} values (0\u2013127). Connect the output to modulate any parameter.`
+                            : 'Outputs the MIDI note number (0\u2013127) on note-on events. Connect the output to control pitch or other parameters.'}
+                        </div>
+
+                        {midiDevices.length === 0 && (
+                          <div className="midi-no-devices">
+                            No MIDI devices detected. Connect a MIDI controller and refresh.
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
