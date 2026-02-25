@@ -8,11 +8,13 @@
 //
 //  API available inside scripts:
 //
-//    out(value)                    — set the output value
-//    pattern(values, durations)   — cycle values with per-step durations
+//    setOutputs(n)                — declare n output ports (1–8)
+//    out(value)                   — send value to output 0
+//    out(index, value)            — send value to output <index>
+//    pattern(values, durations)   — cycle values on output 0
 //    routine(generatorFn)         — generator coroutine
-//    lfo(rate, min, max)          — sine-wave oscillator
-//    ramp(from, to, duration)     — linear ramp
+//    lfo(rate, min, max)          — sine-wave oscillator on output 0
+//    ramp(from, to, duration)     — linear ramp on output 0
 //    random(min, max)             — random float
 //    randomInt(min, max)          — random integer
 //    log(…args)                   — print to console
@@ -20,10 +22,11 @@
 // ════════════════════════════════════════════════════════════
 
 export class ScriptRunner {
-  constructor({ onOutput, onLog }) {
-    this._onOutput = onOutput;   // (nodeId, value) => void
-    this._onLog = onLog;         // (nodeId, ...args) => void
-    this._contexts = new Map();  // nodeId → { timers: Set, stopped: bool }
+  constructor({ onOutput, onLog, onSetOutputs }) {
+    this._onOutput = onOutput;         // (nodeId, outputIndex, value) => void
+    this._onLog = onLog;               // (nodeId, ...args) => void
+    this._onSetOutputs = onSetOutputs; // (nodeId, count) => void
+    this._contexts = new Map();        // nodeId → { timers: Set, stopped: bool }
   }
 
   /**
@@ -38,10 +41,26 @@ export class ScriptRunner {
     // ── Build the sandboxed API ─────────────────────────
     const self = this;
 
-    function out(value) {
+    function setOutputs(n) {
       if (ctx.stopped) return;
+      const count = Math.max(1, Math.min(8, Math.floor(n) || 1));
+      self._onSetOutputs(nodeId, count);
+    }
+
+    function out(indexOrValue, maybeValue) {
+      if (ctx.stopped) return;
+      let outputIndex = 0;
+      let value;
+      if (maybeValue !== undefined) {
+        // out(index, value)
+        outputIndex = Math.max(0, Math.floor(indexOrValue) || 0);
+        value = maybeValue;
+      } else {
+        // out(value)
+        value = indexOrValue;
+      }
       const v = typeof value === 'number' ? value : parseFloat(value) || 0;
-      self._onOutput(nodeId, v);
+      self._onOutput(nodeId, outputIndex, v);
     }
 
     function log(...args) {
@@ -165,11 +184,11 @@ export class ScriptRunner {
     // Wrap in a Function to restrict scope. The function receives
     // named API bindings and runs the user code.
     const apiNames = [
-      'out', 'log', 'pattern', 'routine', 'lfo', 'ramp',
+      'setOutputs', 'out', 'log', 'pattern', 'routine', 'lfo', 'ramp',
       'random', 'randomInt', 'Math',
     ];
     const apiValues = [
-      out, log, pattern, routine, lfo, ramp,
+      setOutputs, out, log, pattern, routine, lfo, ramp,
       random, randomInt, Math,
     ];
 
