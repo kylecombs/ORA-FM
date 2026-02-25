@@ -17,6 +17,18 @@ import { SuperSonic } from 'supersonic-scsynth';
 
 const SOURCE_DEFS = [
   'sine',
+  'saw_osc',
+  'pulse_osc',
+  'tri_osc',
+  'blip_osc',
+  'formant_osc',
+  'dust',
+  'crackle',
+  'lfnoise0',
+  'lfnoise1',
+  'lfnoise2',
+  'white_noise',
+  'pink_noise',
   'sonic-pi-beep',
   'sonic-pi-saw',
   'sonic-pi-pretty_bell',
