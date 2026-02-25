@@ -93,6 +93,46 @@ const NODE_SCHEMA = {
       phase: { label: 'pha',   min: 0,   max: 6.283, step: 0.01, val: 0 },
     },
   },
+  saw_osc: {
+    label: 'Saw Osc',
+    desc: 'modulatable saw',
+    accent: '#b89a6a',
+    synthDef: 'saw_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:  { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
+  pulse_osc: {
+    label: 'Pulse Osc',
+    desc: 'modulatable pulse',
+    accent: '#b89a6a',
+    synthDef: 'pulse_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'width'],
+    params: {
+      freq:  { label: 'freq',  min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:   { label: 'amp',   min: 0,   max: 1,     step: 0.01, val: 0.5 },
+      width: { label: 'width', min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
+  tri_osc: {
+    label: 'Tri Osc',
+    desc: 'modulatable triangle',
+    accent: '#b89a6a',
+    synthDef: 'tri_osc',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp'],
+    params: {
+      freq: { label: 'freq', min: 0.1, max: 20000, step: 0.1,  val: 440 },
+      amp:  { label: 'amp',  min: 0,   max: 1,     step: 0.01, val: 0.5 },
+    },
+  },
   saw: {
     label: 'Saw',
     desc: 'sawtooth',
@@ -493,6 +533,7 @@ const MOD_DEPTH_SCALES = {
   freq:  400,    // amp 0.5 → ±200 Hz frequency deviation (audible FM)
   amp:   1,      // amp 0.5 → ±0.5 amplitude modulation (full-depth AM)
   phase: 6.283,  // amp 0.5 → ±π radians phase modulation (full PM)
+  width: 1,      // amp 0.5 → ±0.5 pulse width modulation (full PWM)
 };
 
 // ── Compute which nodes are "live" (reachable from AudioOut) ──
