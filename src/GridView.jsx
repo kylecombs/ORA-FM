@@ -774,7 +774,19 @@ const PORT_SPACING = 22;
 
 function getNodeWidth(node) {
   if (node.type === 'bang') return (node.bangSize || 60) + 16;
+  if (node.scriptWidth != null) return node.scriptWidth;
   return NODE_SCHEMA[node.type]?.width || NODE_W;
+}
+
+// Script modules can dynamically set their number of outputs via setOutputs(n).
+// This helper returns the effective outputs array for rendering and port positioning.
+function getNodeOutputs(node) {
+  const schema = NODE_SCHEMA[node.type];
+  if (!schema) return [];
+  if (schema.category === 'script' && node.numOutputs > 1) {
+    return Array.from({ length: node.numOutputs }, (_, i) => `out ${i}`);
+  }
+  return schema.outputs;
 }
 
 function getPortPos(node, portType, portIndex) {
@@ -1218,15 +1230,21 @@ export default function GridView() {
     };
 
     scriptRunnerRef.current = new ScriptRunner({
-      onOutput: (nodeId, value) => {
+      onOutput: (nodeId, outputIndex, value) => {
         setNodes((prev) => {
           const node = prev[nodeId];
           if (!node) return prev;
+          const paramKey = `out_${outputIndex}`;
           return {
             ...prev,
             [nodeId]: {
               ...node,
-              params: { ...node.params, value },
+              params: {
+                ...node.params,
+                [paramKey]: value,
+                // Keep 'value' in sync with output 0 for backward compat
+                ...(outputIndex === 0 ? { value } : {}),
+              },
             },
           };
         });
@@ -1241,6 +1259,20 @@ export default function GridView() {
           const next = [...existing, line].slice(-100);
           return { ...prev, [nodeId]: next };
         });
+      },
+      onSetOutputs: (nodeId, count) => {
+        setNodes((prev) => {
+          const node = prev[nodeId];
+          if (!node) return prev;
+          return {
+            ...prev,
+            [nodeId]: { ...node, numOutputs: count },
+          };
+        });
+        // Remove connections from ports that no longer exist
+        setConnections((prev) =>
+          prev.filter((c) => !(c.fromNodeId === nodeId && c.fromPortIndex >= count))
+        );
       },
     });
 
@@ -1744,7 +1776,10 @@ export default function GridView() {
         // Only control/script modules can do control-rate modulation
         if (sourceSchema?.category !== 'control' && sourceSchema?.category !== 'script') continue;
 
-        const value = sourceNode.params.value ?? 0;
+        // Script modules with multiple outputs store per-port values as out_0, out_1, …
+        const value = sourceSchema?.category === 'script'
+          ? (sourceNode.params[`out_${conn.fromPortIndex}`] ?? sourceNode.params.value ?? 0)
+          : (sourceNode.params.value ?? 0);
 
         // Allocate a control bus (stable — same key returns same bus)
         const busIndex = engine.allocControlBus(modKey);
@@ -1841,7 +1876,8 @@ export default function GridView() {
       params,
     };
     if (schema.category === 'script') {
-      node.code = '// Write your script here\n// Output values with: out(value)\n';
+      node.code = '// setOutputs(n)          — declare n output ports\n// out(value)             — send to output 0\n// out(index, value)      — send to output <index>\n';
+      node.numOutputs = 1;
     }
     if (type === 'envelope') {
       node.breakpoints = [
@@ -2142,6 +2178,36 @@ export default function GridView() {
     window.addEventListener('mouseup', onUp);
   }, []);
 
+  // ── Script module resize (drag from corner) ─────────────
+  const scriptResizing = useRef(null); // { nodeId, startX, startWidth }
+  const handleScriptResizeStart = useCallback((e, nodeId, currentWidth) => {
+    e.stopPropagation();
+    e.preventDefault();
+    scriptResizing.current = {
+      nodeId,
+      startX: e.clientX,
+      startWidth: currentWidth,
+    };
+
+    const onMove = (me) => {
+      const info = scriptResizing.current;
+      if (!info) return;
+      const delta = me.clientX - info.startX;
+      const newWidth = Math.max(140, Math.min(400, info.startWidth + delta));
+      setNodes((prev) => ({
+        ...prev,
+        [info.nodeId]: { ...prev[info.nodeId], scriptWidth: newWidth },
+      }));
+    };
+    const onUp = () => {
+      scriptResizing.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
   // ── Save patch to JSON file ─────────────────────────────
   const handleSavePatch = useCallback(() => {
     const patch = {
@@ -2159,6 +2225,8 @@ export default function GridView() {
           params: { ...node.params },
         };
         if (node.code != null) entry.code = node.code;
+        if (node.numOutputs != null && node.numOutputs > 1) entry.numOutputs = node.numOutputs;
+        if (node.scriptWidth != null) entry.scriptWidth = node.scriptWidth;
         if (node.quantize) entry.quantize = true;
         if (node.breakpoints) entry.breakpoints = node.breakpoints;
         if (node.curves) entry.curves = node.curves;
@@ -2256,6 +2324,8 @@ export default function GridView() {
             params: { ...n.params },
           };
           if (n.code != null) restoredNodes[n.id].code = n.code;
+          if (n.numOutputs != null) restoredNodes[n.id].numOutputs = n.numOutputs;
+          if (n.scriptWidth != null) restoredNodes[n.id].scriptWidth = n.scriptWidth;
           if (n.quantize) restoredNodes[n.id].quantize = true;
           if (n.breakpoints) restoredNodes[n.id].breakpoints = n.breakpoints;
           if (n.curves) restoredNodes[n.id].curves = n.curves;
@@ -2317,7 +2387,10 @@ export default function GridView() {
       const srcSchema = NODE_SCHEMA[sourceNode.type];
       if (srcSchema?.category !== 'control' && srcSchema?.category !== 'script') continue;
 
-      const value = sourceNode.params.value ?? 0;
+      // Script modules store per-port values as out_N
+      const value = srcSchema?.category === 'script'
+        ? (sourceNode.params[`out_${conn.fromPortIndex}`] ?? sourceNode.params.value ?? 0)
+        : (sourceNode.params.value ?? 0);
       const prevValue = prev[conn.toNodeId] ?? 0;
 
       // Rising edge: crossed above 0.5
@@ -2409,7 +2482,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle') || e.target.closest('.script-resize-handle')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2648,7 +2721,7 @@ export default function GridView() {
     const isEnvelope = node.type === 'envelope';
     const isBang = node.type === 'bang';
     const isMidiIn = node.type === 'midi_in';
-    const nodeWidth = schema.width || NODE_W;
+    const nodeWidth = getNodeWidth(node);
 
     // Check if this module has any modulation output connections
     // (control/script for control-rate, or any audio source for audio-rate)
@@ -2671,8 +2744,11 @@ export default function GridView() {
         modulatedParams[conn.toParam] = 'audio';
         audioRateModulatedParams.add(conn.toParam);
       } else if (src && (srcCat === 'control' || srcCat === 'script')) {
-        // Control-rate modulation
-        modulatedParams[conn.toParam] = src.params.value ?? 0;
+        // Control-rate modulation — script modules store per-port values as out_N
+        const srcValue = srcCat === 'script'
+          ? (src.params[`out_${conn.fromPortIndex}`] ?? src.params.value ?? 0)
+          : (src.params.value ?? 0);
+        modulatedParams[conn.toParam] = srcValue;
       }
     }
 
@@ -2703,7 +2779,7 @@ export default function GridView() {
         ))}
 
         {/* Output ports */}
-        {schema.outputs.map((name, i) => (
+        {getNodeOutputs(node).map((name, i) => (
           <div
             key={`out-${i}`}
             className="node-port output"
@@ -2949,6 +3025,15 @@ export default function GridView() {
           </div>
         )}
 
+        {/* Script resize handle */}
+        {isScript && (
+          <div
+            className="script-resize-handle"
+            onMouseDown={(e) => handleScriptResizeStart(e, node.id, getNodeWidth(node))}
+            title="Drag to resize"
+          />
+        )}
+
         {/* Live indicator */}
         {(isLive || hasModOutput || runningScripts.has(node.id) || runningEnvelopes.has(node.id)) && <div className="node-live-dot" />}
       </div>
@@ -3191,7 +3276,7 @@ export default function GridView() {
                               tabSize: 2,
                             }}
                             className="script-editor-cm"
-                            placeholder="// Write your script here&#10;// Output values with: out(value)"
+                            placeholder="// setOutputs(n) — declare n output ports&#10;// out(value) or out(index, value)"
                           />
                         </div>
                       </div>
@@ -3216,10 +3301,23 @@ export default function GridView() {
                           </button>
                         )}
                         <div className="script-output-live">
-                          <span className="script-output-live-label">out</span>
-                          <span className={`script-output-live-val${runningScripts.has(selNode.id) ? ' active' : ''}`}>
-                            {(selNode.params.value ?? 0).toFixed(2)}
-                          </span>
+                          {(selNode.numOutputs ?? 1) > 1 ? (
+                            Array.from({ length: selNode.numOutputs }, (_, i) => (
+                              <div key={i} className="script-output-live-row">
+                                <span className="script-output-live-label">out {i}</span>
+                                <span className={`script-output-live-val${runningScripts.has(selNode.id) ? ' active' : ''}`}>
+                                  {(selNode.params[`out_${i}`] ?? 0).toFixed(2)}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <>
+                              <span className="script-output-live-label">out</span>
+                              <span className={`script-output-live-val${runningScripts.has(selNode.id) ? ' active' : ''}`}>
+                                {(selNode.params.out_0 ?? selNode.params.value ?? 0).toFixed(2)}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
 
