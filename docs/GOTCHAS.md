@@ -219,4 +219,35 @@ The same scaling is applied in `handleParamChange` (via `modAmpScaleRef`) so tha
 
 ---
 
+## 9. Clicking/Popping When Dragging Envelope Breakpoints Connected to Amp
+
+**Symptom:** With an envelope module connected to a synth's `amp` input via control-rate modulation, dragging breakpoints in the envelope editor produces intermittent clicking or popping sounds.
+
+**Root cause:** Dragging a breakpoint updates the `nodes` React state (via `handleBreakpointsChange`), which triggers the audio routing sync `useEffect`. The sync loop unconditionally calls `/n_set` on each synth's `amp` parameter (line ~1219), but in scsynth, calling `/n_set` on a parameter that is currently **mapped to a control bus** (via `/n_map`) **breaks the mapping**. The synth's amp momentarily snaps from the envelope's current value to the raw UI slider value, then a few lines later the modulation section re-maps it via `/n_map`. This brief discontinuity (envelope value → slider value → envelope value) happens within a single audio block and produces an audible click.
+
+**Fix:** Pre-compute which `nodeId:param` pairs are control-bus-mapped before the play/update loop, and skip `/n_set` for those params. The control bus value is already being written by the modulation section, so the `/n_set` was redundant (and harmful). When a mod cable is disconnected, the existing unmap logic (step 10) correctly restores the base value.
+
+```javascript
+// Pre-compute control-rate modulated params
+const controlMappedParams = new Set();
+for (const conn of connections) {
+  if (!conn.toParam || conn.isAudioRate) continue;
+  const sourceSchema = NODE_SCHEMA[nodes[conn.fromNodeId]?.type];
+  if (sourceSchema?.category === 'control' || sourceSchema?.category === 'script') {
+    controlMappedParams.add(`${conn.toNodeId}:${conn.toParam}`);
+  }
+}
+
+// In the update loop, guard /n_set:
+if (!controlMappedParams.has(`${id}:amp`)) {
+  engine.setParam(id, 'amp', ampToSend);
+}
+```
+
+As defense-in-depth, a 5 ms `Lag.kr` was also added to the sine oscillator's `amp` parameter in `synthdefs/src/sine.scd` (requires synthdef rebuild via `npm run build:synthdefs`).
+
+**Reference:** `src/GridView.jsx` — routing sync steps 4b, 7, and 8; `synthdefs/src/sine.scd:36`
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*
