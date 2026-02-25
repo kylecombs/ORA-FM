@@ -90,8 +90,8 @@ Create a looping pattern with nested rhythmic subdivisions (nested tuplets). Ins
 |---------|---------|
 | `number` | A value to output — takes one equal subdivision |
 | `Array` | A nested tuplet — takes one subdivision and subdivides it further |
-| `null` | Rest — silence for one subdivision (previous value holds) |
-| `'_'` | Tie — extend the previous note through this subdivision |
+| `r` | Rest — silence for one subdivision (previous value holds) |
+| `_` | Tie — extend the previous note through this subdivision |
 | `w(n, x)` | Weighted subdivision — `x` gets `n` times the normal width |
 
 ```javascript
@@ -106,10 +106,10 @@ tuplet([60, [67, 72], 64], 1.5)
 tuplet([48, [60, 64, 67], 55, 72, 36], 2.0)
 
 // With rests
-tuplet([60, null, 67], 1.5)
+tuplet([60, r, 67], 1.5)
 
 // With ties — 60 sustains for 2/3 of the cycle
-tuplet([60, '_', 67], 1.5)
+tuplet([60, _, 67], 1.5)
 
 // Weighted: middle subdivision is twice as wide
 tuplet([60, w(2, [67, 72]), 64], 1.5)
@@ -174,7 +174,7 @@ Weight helper for use inside `tuplet()`. Makes a subdivision wider or narrower r
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `weight` | `number` | Relative weight (default siblings have weight 1) |
-| `content` | `number`, `Array`, or `null` | The subdivision content |
+| `content` | `number`, `Array`, `r`, or `_` | The subdivision content |
 
 ```javascript
 // 3:2 ratio — first note gets 60% of the time, second gets 40%
@@ -182,6 +182,28 @@ tuplet([w(3, 60), w(2, 64)], 1.0)
 
 // Give a nested group more room
 tuplet([48, w(3, [60, 64, 67, 72]), 36], 2.0)
+```
+
+---
+
+### `r`
+
+Rest constant for use inside `tuplet()`. Skips one subdivision — the previous value continues to hold.
+
+```javascript
+tuplet([60, r, 67], 1.5)   // silence where the second beat would be
+tuplet([60, r, r, 67], 2.0) // two beats of silence in the middle
+```
+
+---
+
+### `_`
+
+Tie constant for use inside `tuplet()`. Extends the previous note through this subdivision — no new event is triggered.
+
+```javascript
+tuplet([60, _, 67], 1.5)   // 60 sustains for 2/3 of the cycle
+tuplet([60, _, _, 67], 2.0) // 60 sustains for 3/4 of the cycle
 ```
 
 ---

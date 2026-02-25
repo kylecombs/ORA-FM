@@ -20,8 +20,14 @@
 //    random(min, max)             — random float
 //    randomInt(min, max)          — random integer
 //    log(…args)                   — print to console
+//    r                            — rest (skip a subdivision)
+//    _                            — tie (extend previous note)
 //    Math                         — standard Math object
 // ════════════════════════════════════════════════════════════
+
+// Sentinel symbols for rest and tie — exposed as bare identifiers r and _
+const REST = Symbol('rest');
+const TIE  = Symbol('tie');
 
 export class ScriptRunner {
   constructor({ onOutput, onLog, onSetOutputs }) {
@@ -217,8 +223,8 @@ export class ScriptRunner {
         if (Array.isArray(el)) {
           // Nested tuplet — recurse
           _flattenTuplet(el, runningOffset, elSize, events);
-        } else if (el === null || el === undefined || el === '_') {
-          // Rest (null) or tie ('_') — no event emitted
+        } else if (el === null || el === undefined || el === REST || el === '_' || el === TIE) {
+          // Rest (r/null) or tie (_/'_') — no event emitted
         } else if (typeof el === 'number') {
           events.push({ time: runningOffset, value: el });
         }
@@ -282,11 +288,11 @@ export class ScriptRunner {
     // named API bindings and runs the user code.
     const apiNames = [
       'setOutputs', 'out', 'log', 'pattern', 'routine', 'lfo', 'ramp',
-      'random', 'randomInt', 'tuplet', 'w', 'Math',
+      'random', 'randomInt', 'tuplet', 'w', 'r', '_', 'Math',
     ];
     const apiValues = [
       setOutputs, out, log, pattern, routine, lfo, ramp,
-      random, randomInt, tuplet, w, Math,
+      random, randomInt, tuplet, w, REST, TIE, Math,
     ];
 
     try {
