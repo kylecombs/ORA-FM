@@ -60,6 +60,7 @@ const FX_DEFS = [
   'sonic-pi-fx_flanger',
   'multiply',
   'print',
+  'ora_scope',
 ];
 
 const SYSTEM_DEFS = [
@@ -75,7 +76,7 @@ export class GridEngine {
     this.booted = false;
     this.onStatus = null;
     this.onPrint = null; // callback for print module messages: (graphId, value) => void
-    this.onScope = null; // callback for scope module samples: (graphId, value) => void
+    this.onScope = null; // callback for scope module samples: (graphId, Float32Array) => void
 
     // Control bus allocator (buses 0–4095 available, separate from audio buses)
     this._nextControlBus = 0;
@@ -101,7 +102,7 @@ export class GridEngine {
       console.log('[GridEngine ctx]', e.state)
     );
 
-    // Listen for /c_set replies (control bus value responses)
+    // Listen for OSC reply messages
     this.sonic.on('message', (msg) => {
       // /c_set format: ['/c_set', busIndex, value]
       if (msg[0] === '/c_set') {
@@ -114,12 +115,19 @@ export class GridEngine {
             this.onPrint(graphId, value);
           }
         }
-        // Look up which scope module owns this control bus
-        if (this.onScope) {
-          const graphId = this._scopeBusToGraph.get(busIndex);
-          if (graphId != null) {
-            this.onScope(graphId, value);
+      }
+      // /b_setn format: ['/b_setn', bufnum, startIndex, numSamples, ...values]
+      // Reply to /b_getn — delivers scope buffer waveform data
+      if (msg[0] === '/b_setn' && this.onScope) {
+        const bufnum = msg[1];
+        const graphId = this._scopeBufToGraph.get(bufnum);
+        if (graphId != null) {
+          const numSamples = msg[3];
+          const samples = new Float32Array(numSamples);
+          for (let i = 0; i < numSamples; i++) {
+            samples[i] = msg[4 + i];
           }
+          this.onScope(graphId, samples);
         }
       }
     });
@@ -128,8 +136,9 @@ export class GridEngine {
     this._printBusToGraph = new Map();
     this._printPollingInterval = null;
 
-    // Scope module state (separate from print for higher polling rate)
-    this._scopeBusToGraph = new Map();
+    // Scope module state: buffer-based waveform capture
+    this._scopeBufToGraph = new Map();  // bufnum → graphId
+    this._scopeGraphToBuf = new Map();  // graphId → bufnum
     this._scopePollingInterval = null;
 
     await this.sonic.init();
@@ -355,47 +364,59 @@ export class GridEngine {
   }
 
   // ── Scope module methods ─────────────────────────────
+  // Uses buffer-based waveform capture: a synthdef writes audio into a
+  // scsynth buffer via BufWr+Phasor at full sample rate.  We periodically
+  // fetch all samples with /b_getn for accurate waveform rendering.
 
-  // Allocate a control bus for a scope module and start fast polling
+  static SCOPE_BUF_FRAMES = 1024;
+
+  // Allocate a scsynth buffer for a scope module and start polling
   startScope(graphId) {
-    const busIndex = 2000 + graphId;
-    this._scopeBusToGraph.set(busIndex, graphId);
+    const bufnum = 100 + graphId; // deterministic buffer numbers
+    this._scopeBufToGraph.set(bufnum, graphId);
+    this._scopeGraphToBuf.set(graphId, bufnum);
 
+    // Allocate buffer in scsynth: bufnum, numFrames, numChannels
+    try {
+      this.sonic.send('/b_alloc', bufnum, GridEngine.SCOPE_BUF_FRAMES, 1);
+    } catch { /* ignore */ }
+
+    // Start polling if not already running
     if (!this._scopePollingInterval) {
       this._scopePollingInterval = setInterval(() => {
-        for (const bus of this._scopeBusToGraph.keys()) {
-          if (this.booted) {
-            try {
-              this.sonic.send('/c_get', bus);
-            } catch { /* ignore */ }
-          }
+        if (!this.booted) return;
+        for (const buf of this._scopeBufToGraph.keys()) {
+          try {
+            this.sonic.send('/b_getn', buf, 0, GridEngine.SCOPE_BUF_FRAMES);
+          } catch { /* ignore */ }
         }
-      }, 33); // Poll at ~30 Hz for smoother waveform display
+      }, 33); // ~30 Hz
     }
 
-    return busIndex;
+    return bufnum;
   }
 
-  // Stop polling for a scope module
+  // Stop polling and free the buffer for a scope module
   stopScope(graphId) {
-    for (const [bus, id] of this._scopeBusToGraph.entries()) {
-      if (id === graphId) {
-        this._scopeBusToGraph.delete(bus);
-        break;
-      }
+    const bufnum = this._scopeGraphToBuf.get(graphId);
+    if (bufnum != null) {
+      this._scopeBufToGraph.delete(bufnum);
+      this._scopeGraphToBuf.delete(graphId);
+      // Free the buffer after the synth has been freed (stop() uses 400ms fade)
+      const sonic = this.sonic;
+      setTimeout(() => {
+        try { sonic.send('/b_free', bufnum); } catch { /* ignore */ }
+      }, 500);
     }
 
-    if (this._scopeBusToGraph.size === 0 && this._scopePollingInterval) {
+    if (this._scopeBufToGraph.size === 0 && this._scopePollingInterval) {
       clearInterval(this._scopePollingInterval);
       this._scopePollingInterval = null;
     }
   }
 
-  // Get the control bus index for a scope module
-  getScopeBus(graphId) {
-    for (const [bus, id] of this._scopeBusToGraph.entries()) {
-      if (id === graphId) return bus;
-    }
-    return null;
+  // Get the buffer number for a scope module
+  getScopeBuffer(graphId) {
+    return this._scopeGraphToBuf.get(graphId) ?? null;
   }
 }
