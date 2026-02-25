@@ -887,6 +887,34 @@
   max-height: 36px;
 }
 
+/* ── Script resize handle (bottom-right corner) ── */
+.script-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: ew-resize;
+  border-radius: 0 0 10px 0;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
+.script-resize-handle::before {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--accent);
+  border-bottom: 1.5px solid var(--accent);
+}
+
+.script-resize-handle:hover {
+  opacity: 0.8;
+}
+
 /* ═══════════════════════════════════════════════
    Module Details Panel
    ═══════════════════════════════════════════════ */
@@ -1179,6 +1207,8 @@
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .script-output-live-label {
@@ -1200,6 +1230,12 @@
 
 .script-output-live-val.active {
   color: var(--sage, #7aab88);
+}
+
+.script-output-live-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── Script console ────────────────────────────── */
