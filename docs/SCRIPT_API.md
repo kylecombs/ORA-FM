@@ -14,6 +14,9 @@ pattern([60, 64, 67, 72], 0.5)
 // Rhythmic pattern with per-step durations
 pattern([60, 64, 67], [0.5, 0.25, 1.0])
 
+// Nested tuplet: divide into 3, middle slot subdivides into 2
+tuplet([60, [67, 72], 64], 1.5)
+
 // Generator-based sequence
 routine(function*() {
   while (true) {
@@ -69,6 +72,139 @@ pattern([48, 55, 60, 64], [0.6, 0.2])
 ```
 
 The first value is emitted immediately. The duration array wraps around if shorter than the values array (and vice versa).
+
+---
+
+### `tuplet(divisions, duration)`
+
+Create a looping pattern with nested rhythmic subdivisions (nested tuplets). Inspired by the [Nestup](https://github.com/cutelabnyc/nested-tuplets) language — each array level subdivides its parent's time slot equally.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `divisions` | `Array` | Nested array describing the rhythmic structure (see below) |
+| `duration` | `number` | Total cycle duration in seconds. Default: `1` |
+
+**Array elements can be:**
+
+| Element | Meaning |
+|---------|---------|
+| `number` | A value to output — takes one equal subdivision |
+| `Array` | A nested tuplet — takes one subdivision and subdivides it further |
+| `r` | Rest — silence for one subdivision (previous value holds) |
+| `_` | Tie — extend the previous note through this subdivision |
+| `w(n, x)` | Weighted subdivision — `x` gets `n` times the normal width |
+
+```javascript
+// Simple triplet: 3 equal notes over 1.5 seconds
+tuplet([60, 64, 67], 1.5)
+
+// Nested: divide into 3, middle slot subdivides into 2
+// → 60 at 0ms, 67 at 500ms, 72 at 750ms, 64 at 1000ms
+tuplet([60, [67, 72], 64], 1.5)
+
+// Deep nesting: quintuplet where beat 2 is a triplet
+tuplet([48, [60, 64, 67], 55, 72, 36], 2.0)
+
+// With rests
+tuplet([60, r, 67], 1.5)
+
+// With ties — 60 sustains for 2/3 of the cycle
+tuplet([60, _, 67], 1.5)
+
+// Weighted: middle subdivision is twice as wide
+tuplet([60, w(2, [67, 72]), 64], 1.5)
+// → 60 gets 1/4, [67,72] gets 2/4, 64 gets 1/4
+
+// Complex: 7-tuplet with nested triplet at beat 3
+tuplet([48, 50, [60, 62, 64], 55, 57, 59, 36], 3.0)
+```
+
+The pattern loops automatically. The first value is emitted immediately.
+
+#### Ratcheting
+
+Use nesting to subdivide a single beat into rapid-fire repetitions — a classic ratchet effect.
+
+```javascript
+// One beat out of four ratchets into 4 rapid hits
+tuplet([60, [72, 72, 72, 72], 64, 67], 2.0)
+//      ↑    ↑ ratchet ×4     ↑   ↑
+//   500ms  4×125ms          500ms 500ms
+
+// Two beats get different subdivisions
+tuplet([60, [72, 72, 72], 64, [67, 67]], 2.0)
+//          ↑ triplet ↑       ↑ 2× ↑
+
+// Nested ratchet: subdivide a subdivision even further
+tuplet([60, [72, [84, 84, 84], 72], 64], 2.0)
+//               ↑ 3 hits crammed into 1/3 of 1/3 = 1/9 of the cycle
+
+// Progressive density: each beat doubles in speed
+tuplet([
+  [60],
+  [60, 60],
+  [60, 60, 60, 60],
+  [60, 60, 60, 60, 60, 60, 60, 60]
+], 4.0)
+// 1 → 2 → 4 → 8 hits per beat
+```
+
+#### Weighted ratchets
+
+Combine `w()` with ratcheting for accented or accelerating subdivisions.
+
+```javascript
+// Ratchet with a longer first hit (accent)
+tuplet([60, [w(2, 72), 72, 72], 64, 67], 2.0)
+
+// Accelerating feel via decreasing weights
+tuplet([60, [w(4, 72), w(2, 72), w(1, 72)], 64], 2.0)
+```
+
+#### Nesting depth
+
+There is no hard limit on nesting depth. Each level subdivides its parent's time slot. The practical limit is the 10ms minimum step time — for a 2-second cycle, that allows roughly 7–8 levels of binary subdivision before events clamp (2s → 1s → 500ms → … → 15ms).
+
+---
+
+### `w(weight, content)`
+
+Weight helper for use inside `tuplet()`. Makes a subdivision wider or narrower relative to its siblings.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `weight` | `number` | Relative weight (default siblings have weight 1) |
+| `content` | `number`, `Array`, `r`, or `_` | The subdivision content |
+
+```javascript
+// 3:2 ratio — first note gets 60% of the time, second gets 40%
+tuplet([w(3, 60), w(2, 64)], 1.0)
+
+// Give a nested group more room
+tuplet([48, w(3, [60, 64, 67, 72]), 36], 2.0)
+```
+
+---
+
+### `r`
+
+Rest constant for use inside `tuplet()`. Skips one subdivision — the previous value continues to hold.
+
+```javascript
+tuplet([60, r, 67], 1.5)   // silence where the second beat would be
+tuplet([60, r, r, 67], 2.0) // two beats of silence in the middle
+```
+
+---
+
+### `_`
+
+Tie constant for use inside `tuplet()`. Extends the previous note through this subdivision — no new event is triggered.
+
+```javascript
+tuplet([60, _, 67], 1.5)   // 60 sustains for 2/3 of the cycle
+tuplet([60, _, _, 67], 2.0) // 60 sustains for 3/4 of the cycle
+```
 
 ---
 
