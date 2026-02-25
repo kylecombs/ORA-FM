@@ -54,6 +54,8 @@ const FX_DEFS = [
   'sonic-pi-fx_nrlpf',
   'sonic-pi-fx_nrhpf',
   'sonic-pi-fx_nrbpf',
+  'moog',
+  'moogff',
   'sonic-pi-fx_distortion',
   'sonic-pi-fx_flanger',
   'multiply',
