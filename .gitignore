@@ -2,6 +2,5 @@ node_modules
 dist
 .DS_Store
 *.local
-./scripts/ralph/docker/.env
 .mcp.json
 scripts/ralph/docker/.env

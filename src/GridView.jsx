@@ -605,6 +605,36 @@ const NODE_SCHEMA = {
       mix:      { label: 'mix',   min: 0,    max: 1,  step: 0.01, val: 1 },
     },
   },
+  resonz: {
+    label: 'Resonz',
+    desc: 'resonant bandpass',
+    accent: '#bf9b7a',
+    synthDef: 'resonz',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    modInputs: ['cutoff', 'bw'],
+    params: {
+      cutoff: { label: 'freq', min: 20,   max: 20000, step: 1,    val: 1000 },
+      bw:     { label: 'bwr',  min: 0.01, max: 2,     step: 0.01, val: 0.5 },
+      mix:    { label: 'mix',  min: 0,    max: 1,      step: 0.01, val: 1 },
+    },
+  },
+  comb: {
+    label: 'Comb',
+    desc: 'comb delay filter',
+    accent: '#7abfbf',
+    synthDef: 'comb',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    modInputs: ['delaytime', 'decaytime'],
+    params: {
+      delaytime: { label: 'delay', min: 0.0001, max: 1,  step: 0.001, val: 0.2 },
+      decaytime: { label: 'decay', min: 0.01,   max: 20, step: 0.1,   val: 1 },
+      mix:       { label: 'mix',   min: 0,       max: 1,  step: 0.01,  val: 0.5 },
+    },
+  },
   // ── Utility modules ─────────────────────────────────────
   multiply: {
     label: 'Multiply',
@@ -738,13 +768,13 @@ const MODULE_CATEGORIES = [
     id: 'filters',
     label: 'Filters',
     desc: 'frequency shaping',
-    types: ['fx_lpf', 'fx_hpf', 'fx_bpf', 'fx_rlpf', 'fx_rhpf', 'fx_rbpf', 'fx_moog', 'fx_moogff', 'fx_nlpf', 'fx_nhpf', 'fx_nbpf', 'fx_nrlpf', 'fx_nrhpf', 'fx_nrbpf'],
+    types: ['fx_lpf', 'fx_hpf', 'fx_bpf', 'fx_rlpf', 'fx_rhpf', 'fx_rbpf', 'fx_moog', 'fx_moogff', 'fx_nlpf', 'fx_nhpf', 'fx_nbpf', 'fx_nrlpf', 'fx_nrhpf', 'fx_nrbpf', 'resonz'],
   },
   {
     id: 'fx',
     label: 'Effects',
     desc: 'time & space',
-    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger'],
+    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger', 'comb'],
   },
   {
     id: 'utility',
