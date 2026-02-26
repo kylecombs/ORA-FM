@@ -58,6 +58,8 @@ const FX_DEFS = [
   'moogff',
   'sonic-pi-fx_distortion',
   'sonic-pi-fx_flanger',
+  'resonz',
+  'comb',
   'multiply',
   'print',
 ];
