@@ -916,7 +916,6 @@ function panForPort(portIndex) {
 // Text readouts rendered via a lightweight Canvas 2D overlay.
 const SCOPE_W = 260;
 const SCOPE_H = 140;
-const SCOPE_H_MODERN = 100;
 const SCOPE_DISPLAY_SAMPLES = 512; // samples to display (half the buffer)
 
 // ── Shared fullscreen-quad vertex shader ──
@@ -1064,17 +1063,14 @@ function scopeCreateProgram(gl, vSrc, fSrc) {
   return p;
 }
 
-function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
+function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor }) {
   const canvasRef = useRef(null);
   const textCanvasRef = useRef(null);
   const animRef = useRef(null);
   const glStateRef = useRef(null);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
   const normBuf = useRef(new Float32Array(SCOPE_DISPLAY_SAMPLES));
 
-  const isClassic = mode === 'classic';
-  const h = isClassic ? SCOPE_H : SCOPE_H_MODERN;
+  const h = SCOPE_H;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1184,7 +1180,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
     const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
 
-    const state = { lastMode: null, smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
+    const state = { smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
     glStateRef.current = state;
 
     const tctx = textCanvasRef.current?.getContext('2d');
@@ -1231,13 +1227,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
 
     // ── Draw loop ──
     const draw = () => {
-      const curMode = modeRef.current;
-      const isClassicNow = curMode === 'classic';
-      const ch = isClassicNow ? SCOPE_H : SCOPE_H_MODERN;
-
-      if (curMode !== state.lastMode) {
-        state.lastMode = curMode;
-      }
+      const ch = SCOPE_H;
 
       if (canvas.height !== ch) canvas.height = ch;
       const tc = textCanvasRef.current;
@@ -1281,12 +1271,6 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
           norm[i] = Math.max(0, Math.min(1, (buf[trigIdx + i] - yMin) / range));
         }
 
-        // Upload waveform texture (for modern fill-under-curve)
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, displayLen, 1, 0,
-                      gl.RED, gl.FLOAT, norm.subarray(0, displayLen));
-
         // Build line geometry: 4 copies of (x,y) per sample in clip space
         numSegments = displayLen - 1;
         const dx = 2.0 / (displayLen - 1);
@@ -1304,85 +1288,50 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, scratchBuf.subarray(0, displayLen * 8));
       }
 
-      // ── Render ──
-      if (isClassicNow) {
-        // ── Classic mode: direct rendering with multi-pass CRT glow ──
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, SCOPE_W, SCOPE_H);
+      // ── Render: CRT mode with multi-pass glow ──
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, SCOPE_W, SCOPE_H);
+      gl.disable(gl.BLEND);
+
+      // Graticule + background
+      gl.useProgram(gratProg);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, waveTex);
+      gl.uniform1i(gratU.waveform, 0);
+      gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
+      gl.uniform1f(gratU.mode, 1.0);
+      gl.uniform3f(gratU.accent, ar, ag, ab);
+      gl.uniform1f(gratU.hasSignal, 0.0);
+      gl.bindVertexArray(gratVao);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Waveform lines with multi-pass glow (core + mid + outer)
+      if (hasSignal && numSegments > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.useProgram(lineProg);
+        gl.uniform2f(lineU.resolution, SCOPE_W, SCOPE_H);
+        gl.uniform3f(lineU.color, ar, ag, ab);
+        gl.bindVertexArray(lineVao);
+
+        gl.uniform1f(lineU.size, 2.5);
+        gl.uniform1f(lineU.intensity, 1.4);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+        gl.uniform1f(lineU.size, 6.0);
+        gl.uniform1f(lineU.intensity, 0.45);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+        gl.uniform1f(lineU.size, 12.0);
+        gl.uniform1f(lineU.intensity, 0.18);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
         gl.disable(gl.BLEND);
-
-        // Graticule + background
-        gl.useProgram(gratProg);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.uniform1i(gratU.waveform, 0);
-        gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
-        gl.uniform1f(gratU.mode, 1.0);
-        gl.uniform3f(gratU.accent, ar, ag, ab);
-        gl.uniform1f(gratU.hasSignal, 0.0);
-        gl.bindVertexArray(gratVao);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Waveform lines with multi-pass glow (core + mid + outer)
-        if (hasSignal && numSegments > 0) {
-          gl.enable(gl.BLEND);
-          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-          gl.useProgram(lineProg);
-          gl.uniform2f(lineU.resolution, SCOPE_W, SCOPE_H);
-          gl.uniform3f(lineU.color, ar, ag, ab);
-          gl.bindVertexArray(lineVao);
-
-          gl.uniform1f(lineU.size, 1.5);
-          gl.uniform1f(lineU.intensity, 1.4);
-          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
-
-          gl.uniform1f(lineU.size, 4.0);
-          gl.uniform1f(lineU.intensity, 0.45);
-          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
-
-          gl.uniform1f(lineU.size, 8.0);
-          gl.uniform1f(lineU.intensity, 0.18);
-          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
-
-          gl.disable(gl.BLEND);
-        }
-
-      } else {
-        // ── Modern mode: direct rendering ──
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, SCOPE_W, ch);
-        gl.disable(gl.BLEND);
-
-        // Graticule + background + fill-under-curve
-        gl.useProgram(gratProg);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.uniform1i(gratU.waveform, 0);
-        gl.uniform2f(gratU.resolution, SCOPE_W, ch);
-        gl.uniform1f(gratU.mode, 0.0);
-        gl.uniform3f(gratU.accent, ar, ag, ab);
-        gl.uniform1f(gratU.hasSignal, hasSignal ? 1.0 : 0.0);
-        gl.bindVertexArray(gratVao);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Waveform lines (single pass, additive)
-        if (hasSignal && numSegments > 0) {
-          gl.enable(gl.BLEND);
-          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-          gl.useProgram(lineProg);
-          gl.uniform2f(lineU.resolution, SCOPE_W, ch);
-          gl.uniform3f(lineU.color, ar, ag, ab);
-          gl.uniform1f(lineU.size, 1.5);
-          gl.uniform1f(lineU.intensity, 1.0);
-          gl.bindVertexArray(lineVao);
-          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
-          gl.disable(gl.BLEND);
-        }
       }
 
       // ── Text overlay ──
       if (tctx) {
-        tctx.clearRect(0, 0, SCOPE_W, ch);
+        tctx.clearRect(0, 0, SCOPE_W, SCOPE_H);
 
         if (hasSignal) {
           let peak = 0;
@@ -1391,27 +1340,10 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
             if (a > peak) peak = a;
           }
 
-          if (isClassicNow) {
-            tctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
-            tctx.font = '10px "DM Mono", monospace';
-            tctx.textAlign = 'right';
-            tctx.fillText(peak.toFixed(3), SCOPE_W - 5, 13);
-          } else {
-            tctx.fillStyle = 'rgba(212, 207, 200, 0.4)';
-            tctx.font = '9px "DM Mono", monospace';
-            tctx.textAlign = 'right';
-            tctx.fillText(peak.toFixed(3), SCOPE_W - 4, 10);
-
-            tctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
-            tctx.textAlign = 'left';
-            tctx.fillText(yMin.toFixed(1), 4, ch - 4);
-            tctx.fillText(yMax.toFixed(1), 4, 10);
-          }
-        } else if (!isClassicNow) {
-          tctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
-          tctx.font = '9px "DM Mono", monospace';
-          tctx.textAlign = 'center';
-          tctx.fillText('no signal', SCOPE_W / 2, ch / 2 + 3);
+          tctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
+          tctx.font = '10px "DM Mono", monospace';
+          tctx.textAlign = 'right';
+          tctx.fillText(peak.toFixed(3), SCOPE_W - 5, 13);
         }
       }
 
@@ -1436,7 +1368,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
   }, [buffersRef, nodeId, bufferSize, accentColor]);
 
   return (
-    <div className={`scope-body ${isClassic ? 'scope-classic' : 'scope-modern'}`}>
+    <div className="scope-body scope-classic">
       <canvas
         ref={canvasRef}
         className="scope-canvas"
@@ -2238,9 +2170,6 @@ export default function GridView() {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
     }
-    if (type === 'scope') {
-      node.scopeMode = 'modern'; // 'modern' (clean utility) or 'classic' (phosphor CRT)
-    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -2374,15 +2303,6 @@ export default function GridView() {
     setPrintLogs([]);
   }, []);
 
-  // ── Scope mode toggle ─────────────────────────────────
-  const handleScopeModeToggle = useCallback((nodeId) => {
-    setNodes((prev) => {
-      const node = prev[nodeId];
-      if (!node) return prev;
-      const next = node.scopeMode === 'classic' ? 'modern' : 'classic';
-      return { ...prev, [nodeId]: { ...node, scopeMode: next } };
-    });
-  }, []);
 
   // ── Envelope handlers ──────────────────────────────────
   const handleBreakpointsChange = useCallback((nodeId, breakpoints, curves) => {
@@ -2568,7 +2488,6 @@ export default function GridView() {
         if (node.printPrefix != null) entry.printPrefix = node.printPrefix;
         if (node.printColor != null) entry.printColor = node.printColor;
         if (node.bangSize != null) entry.bangSize = node.bangSize;
-        if (node.scopeMode != null) entry.scopeMode = node.scopeMode;
         if (node.midiMode != null) entry.midiMode = node.midiMode;
         if (node.midiChannel != null) entry.midiChannel = node.midiChannel;
         if (node.midiCcNumber != null) entry.midiCcNumber = node.midiCcNumber;
@@ -2666,7 +2585,6 @@ export default function GridView() {
           if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
           if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
           if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
-          if (n.scopeMode != null) restoredNodes[n.id].scopeMode = n.scopeMode;
           if (n.midiMode != null) restoredNodes[n.id].midiMode = n.midiMode;
           if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
           if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
@@ -3088,7 +3006,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ' scope scope-classic' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -3251,24 +3169,12 @@ export default function GridView() {
 
         {/* Scope (oscilloscope) display */}
         {node.type === 'scope' && (
-          <>
-            <ScopeCanvas
-              buffersRef={scopeBuffersRef}
-              nodeId={node.id}
-              bufferSize={SCOPE_BUFFER_SIZE}
-              accentColor={schema.accent}
-              mode={node.scopeMode || 'modern'}
-            />
-            <div className="scope-controls">
-              <button
-                className="scope-mode-btn"
-                onClick={(e) => { e.stopPropagation(); handleScopeModeToggle(node.id); }}
-                title={`Switch to ${(node.scopeMode || 'modern') === 'classic' ? 'modern' : 'classic'} mode`}
-              >
-                {(node.scopeMode || 'modern') === 'classic' ? 'CRT' : 'clean'}
-              </button>
-            </div>
-          </>
+          <ScopeCanvas
+            buffersRef={scopeBuffersRef}
+            nodeId={node.id}
+            bufferSize={SCOPE_BUFFER_SIZE}
+            accentColor={schema.accent}
+          />
         )}
 
         {/* MIDI input display */}
@@ -3746,34 +3652,6 @@ export default function GridView() {
                   ) : selNode.type === 'scope' ? (
                     <div className="details-body">
                       <div className="scope-details-options">
-                        <div className="scope-mode-option">
-                          <span className="scope-mode-label">Display mode</span>
-                          <div className="scope-mode-toggle-group">
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'classic' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'classic' },
-                              }))}
-                            >
-                              Classic
-                            </button>
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'modern' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'modern' },
-                              }))}
-                            >
-                              Modern
-                            </button>
-                          </div>
-                        </div>
-                        <div className="scope-mode-desc">
-                          {(selNode.scopeMode || 'modern') === 'classic'
-                            ? 'CRT phosphor glow with persistence trail and graticule grid.'
-                            : 'Clean utility trace with filled area, matching the app aesthetic.'}
-                        </div>
                         <div className="print-hint">
                           Connect a signal source to visualize the waveform.
                           Displays values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.
