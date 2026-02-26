@@ -906,24 +906,178 @@ function panForPort(portIndex) {
   return portIndex === 0 ? -0.8 : 0.8;
 }
 
-// ── Oscilloscope canvas component ──────────────────────────
-// Two modes:
-//   'classic' — CRT phosphor-glow with persistence trail, graticule, additive blending
-//   'modern'  — Clean utility trace matching the app's dark aesthetic
-//
-// Data: receives full 1024-sample buffer snapshots from scsynth via /b_getn.
-// Uses rising zero-crossing trigger for a stable, non-scrolling display.
+// ── WebGL Oscilloscope ─────────────────────────────────────────
+// GPU-accelerated scope rendering using signed-distance-field approach.
+// The fragment shader computes per-pixel distance to the waveform curve
+// for anti-aliased trace with natural glow — eliminates CPU path-building.
+// Classic mode: ping-pong FBOs for phosphor persistence trail.
+// Text readouts rendered via a lightweight Canvas 2D overlay.
 const SCOPE_W = 260;
 const SCOPE_H = 140;
 const SCOPE_H_MODERN = 100;
 const SCOPE_DISPLAY_SAMPLES = 512; // samples to display (half the buffer)
 
+const SCOPE_VERT_SRC = `#version 300 es
+in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+const SCOPE_FRAG_SRC = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_waveform;
+uniform sampler2D u_prevFrame;
+uniform vec2 u_resolution;
+uniform vec3 u_accent;
+uniform float u_numSamples;
+uniform float u_hasSignal;
+uniform float u_mode; // 0.0 = modern, 1.0 = classic
+
+in vec2 v_uv;
+out vec4 fragColor;
+
+float waveDist() {
+  float texel = 1.0 / u_numSamples;
+  float x = v_uv.x;
+  float y = v_uv.y;
+
+  float s  = texture(u_waveform, vec2(x, 0.5)).r;
+  float sR = texture(u_waveform, vec2(x + texel, 0.5)).r;
+  float sL = texture(u_waveform, vec2(x - texel, 0.5)).r;
+
+  float d = abs(y - s);
+
+  // Steep slope: pixel between consecutive samples -> on the line
+  float mn = min(s, sR);
+  float mx = max(s, sR);
+  if (y >= mn && y <= mx) d = 0.0;
+
+  mn = min(sL, s);
+  mx = max(sL, s);
+  if (y >= mn && y <= mx) d = 0.0;
+
+  return d * u_resolution.y;
+}
+
+void main() {
+  bool classic = u_mode > 0.5;
+
+  vec3 bg = classic
+    ? vec3(0.031, 0.031, 0.039)
+    : vec3(0.067, 0.063, 0.063);
+
+  // Graticule
+  float grat = 0.0;
+  vec3 gc = vec3(0.478, 0.459, 0.439);
+
+  if (classic) {
+    for (float i = 1.0; i < 5.0; i += 1.0) {
+      float d = abs(v_uv.y - i / 5.0) * u_resolution.y;
+      grat = max(grat, smoothstep(0.7, 0.0, d) * 0.08);
+    }
+    for (float i = 1.0; i < 8.0; i += 1.0) {
+      float d = abs(v_uv.x - i / 8.0) * u_resolution.x;
+      grat = max(grat, smoothstep(0.7, 0.0, d) * 0.08);
+    }
+  }
+
+  float cd = abs(v_uv.y - 0.5) * u_resolution.y;
+  grat = max(grat, smoothstep(0.7, 0.0, cd) * (classic ? 0.18 : 0.12));
+
+  if (!classic) {
+    float q1 = abs(v_uv.y - 0.25) * u_resolution.y;
+    float q3 = abs(v_uv.y - 0.75) * u_resolution.y;
+    grat = max(grat, smoothstep(0.7, 0.0, q1) * 0.05);
+    grat = max(grat, smoothstep(0.7, 0.0, q3) * 0.05);
+  }
+
+  vec3 color = bg + gc * grat;
+  float wa = 0.0;
+
+  if (u_hasSignal > 0.5) {
+    float dist = waveDist();
+
+    if (classic) {
+      // Triple glow: core + mid + outer
+      wa = smoothstep(1.2, 0.0, dist) * 0.9
+         + smoothstep(3.5, 0.0, dist) * 0.3
+         + smoothstep(7.0, 0.0, dist) * 0.15;
+    } else {
+      wa = smoothstep(1.5, 0.0, dist) * 0.7;
+      // Subtle filled area under curve
+      float s = texture(u_waveform, vec2(v_uv.x, 0.5)).r;
+      if (v_uv.y < s) wa = max(wa, 0.06);
+    }
+  }
+
+  // Persistence (classic only)
+  if (classic) {
+    vec4 prev = texture(u_prevFrame, v_uv);
+    wa = max(wa, prev.a * 0.88);
+  }
+
+  color += u_accent * wa;
+  fragColor = vec4(color, wa);
+}`;
+
+// ── WebGL helpers ──────────────────────────────────────────────
+function scopeCompileShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error('[Scope] shader error:', gl.getShaderInfoLog(s));
+    gl.deleteShader(s);
+    return null;
+  }
+  return s;
+}
+
+function scopeCreateProgram(gl, vSrc, fSrc) {
+  const vs = scopeCompileShader(gl, gl.VERTEX_SHADER, vSrc);
+  const fs = scopeCompileShader(gl, gl.FRAGMENT_SHADER, fSrc);
+  if (!vs || !fs) return null;
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error('[Scope] program error:', gl.getProgramInfoLog(p));
+    return null;
+  }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  return p;
+}
+
+function scopeCreateFBO(gl, w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  return { fbo, tex };
+}
+
 function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
   const canvasRef = useRef(null);
+  const textCanvasRef = useRef(null);
   const animRef = useRef(null);
-  const trailRef = useRef(null);
+  const glStateRef = useRef(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const normBuf = useRef(new Float32Array(SCOPE_DISPLAY_SAMPLES));
 
   const isClassic = mode === 'classic';
   const h = isClassic ? SCOPE_H : SCOPE_H_MODERN;
@@ -931,34 +1085,81 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
 
-    // Off-screen canvas for classic persistence trail
-    const trail = document.createElement('canvas');
-    trail.width = SCOPE_W;
-    trail.height = SCOPE_H;
-    const tctx = trail.getContext('2d');
-    tctx.fillStyle = '#08080a';
-    tctx.fillRect(0, 0, SCOPE_W, SCOPE_H);
-    trailRef.current = trail;
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+    if (!gl) {
+      console.warn('[Scope] WebGL2 not available');
+      return;
+    }
 
-    // Parse accent hex → rgba helper
-    const r = parseInt(accentColor.slice(1, 3), 16);
-    const g = parseInt(accentColor.slice(3, 5), 16);
-    const b = parseInt(accentColor.slice(5, 7), 16);
-    const accentRgba = (a) => `rgba(${r},${g},${b},${a})`;
+    // Enable float texture linear filtering if available
+    gl.getExtension('OES_texture_float_linear');
 
-    // Find a rising zero-crossing in the buffer for stable triggering.
-    // Searches the first half so we always have SCOPE_DISPLAY_SAMPLES after trigger.
-    const findTrigger = (buf) => {
-      const searchEnd = buf.length - SCOPE_DISPLAY_SAMPLES;
-      for (let i = 0; i < searchEnd - 1; i++) {
-        if (buf[i] <= 0 && buf[i + 1] > 0) return i;
-      }
-      return 0; // fallback: no zero-crossing found
+    const program = scopeCreateProgram(gl, SCOPE_VERT_SRC, SCOPE_FRAG_SRC);
+    if (!program) return;
+
+    // Uniform locations
+    const u = {
+      waveform:   gl.getUniformLocation(program, 'u_waveform'),
+      prevFrame:  gl.getUniformLocation(program, 'u_prevFrame'),
+      resolution: gl.getUniformLocation(program, 'u_resolution'),
+      accent:     gl.getUniformLocation(program, 'u_accent'),
+      numSamples: gl.getUniformLocation(program, 'u_numSamples'),
+      hasSignal:  gl.getUniformLocation(program, 'u_hasSignal'),
+      mode:       gl.getUniformLocation(program, 'u_mode'),
     };
 
-    // Compute auto-scaled Y bounds from a contiguous slice
+    // Fullscreen quad
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const posLoc = gl.getAttribLocation(program, 'a_pos');
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    // Waveform data texture (R32F, 1D)
+    const waveTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, waveTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, SCOPE_DISPLAY_SAMPLES, 1, 0,
+                  gl.RED, gl.FLOAT, new Float32Array(SCOPE_DISPLAY_SAMPLES));
+
+    // Ping-pong FBOs for classic persistence
+    const fbos = [scopeCreateFBO(gl, SCOPE_W, SCOPE_H), scopeCreateFBO(gl, SCOPE_W, SCOPE_H)];
+    for (const f of fbos) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
+      gl.clearColor(0.031, 0.031, 0.039, 0.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    // Accent color (0–1 float)
+    const ar = parseInt(accentColor.slice(1, 3), 16) / 255;
+    const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
+    const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
+
+    const state = { ping: 0, lastMode: null };
+    glStateRef.current = state;
+
+    // Text overlay context
+    const tctx = textCanvasRef.current?.getContext('2d');
+
+    // ── Helpers (same trigger + auto-scale logic) ──
+    const findTrigger = (buf) => {
+      const end = buf.length - SCOPE_DISPLAY_SAMPLES;
+      for (let i = 0; i < end - 1; i++) {
+        if (buf[i] <= 0 && buf[i + 1] > 0) return i;
+      }
+      return 0;
+    };
+
     const computeYBounds = (buf, start, count) => {
       let min = Infinity, max = -Infinity;
       for (let i = start; i < start + count; i++) {
@@ -971,188 +1172,158 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       return { yMin: min - pad, yMax: max + pad };
     };
 
-    // Build vertex path from contiguous slice
-    const buildPath = (buf, start, count, w, h, yMin, yScale) => {
-      const pts = [];
-      for (let i = 0; i < count; i++) {
-        const v = buf[start + i];
-        pts.push({ x: (i / (count - 1)) * w, y: h - (v - yMin) * yScale });
-      }
-      return pts;
-    };
+    // ── Draw loop ──
+    const draw = () => {
+      const curMode = modeRef.current;
+      const isClassicNow = curMode === 'classic';
+      const ch = isClassicNow ? SCOPE_H : SCOPE_H_MODERN;
 
-    // Stroke a path onto a context
-    const strokePath = (c, pts) => {
-      c.beginPath();
-      for (let i = 0; i < pts.length; i++) {
-        if (i === 0) c.moveTo(pts[i].x, pts[i].y);
-        else c.lineTo(pts[i].x, pts[i].y);
+      // Handle mode change: clear persistence FBOs
+      if (curMode !== state.lastMode) {
+        if (isClassicNow) {
+          for (const f of fbos) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
+            gl.clearColor(0.031, 0.031, 0.039, 0.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+          }
+          state.ping = 0;
+        }
+        state.lastMode = curMode;
       }
-      c.stroke();
-    };
 
-    // ── Classic mode draw (phosphor CRT) ──
-    const drawClassic = () => {
-      const w = SCOPE_W;
-      const ch = SCOPE_H;
+      // Ensure canvas backing store matches current mode
+      if (canvas.height !== ch) canvas.height = ch;
+      const tc = textCanvasRef.current;
+      if (tc && tc.height !== ch) tc.height = ch;
+
+      // Get buffer data
       const buf = buffersRef.current.get(nodeId);
+      const hasSignal = buf && buf.length >= SCOPE_DISPLAY_SAMPLES;
 
-      // Phosphor persistence: fade previous frame
-      tctx.globalCompositeOperation = 'source-over';
-      tctx.fillStyle = 'rgba(8, 8, 10, 0.12)';
-      tctx.fillRect(0, 0, w, ch);
+      let yMin = 0, yMax = 1;
 
-      if (buf && buf.length >= SCOPE_DISPLAY_SAMPLES) {
+      if (hasSignal) {
         const trigIdx = findTrigger(buf);
         const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
-        const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
-        const yScale = ch / (yMax - yMin);
-        const pts = buildPath(buf, trigIdx, displayLen, w, ch, yMin, yScale);
+        const bounds = computeYBounds(buf, trigIdx, displayLen);
+        yMin = bounds.yMin;
+        yMax = bounds.yMax;
+        const range = yMax - yMin;
 
-        tctx.globalCompositeOperation = 'lighter';
-        tctx.lineJoin = 'round';
-        tctx.lineCap = 'round';
-
-        // Glow layer (wide, soft)
-        tctx.strokeStyle = accentRgba(0.15);
-        tctx.lineWidth = 6;
-        strokePath(tctx, pts);
-
-        // Mid glow
-        tctx.strokeStyle = accentRgba(0.3);
-        tctx.lineWidth = 3;
-        strokePath(tctx, pts);
-
-        // Core trace (bright, thin)
-        tctx.strokeStyle = accentRgba(0.9);
-        tctx.lineWidth = 1.5;
-        strokePath(tctx, pts);
-
-        tctx.globalCompositeOperation = 'source-over';
-      }
-
-      // Compose final frame
-      ctx.fillStyle = '#08080a';
-      ctx.fillRect(0, 0, w, ch);
-
-      // Graticule
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.08)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 5; i++) {
-        const y = Math.round(ch * (i / 5)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      }
-      for (let i = 1; i < 8; i++) {
-        const x = Math.round(w * (i / 8)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
-      }
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.18)';
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(ch / 2) + 0.5);
-      ctx.lineTo(w, Math.round(ch / 2) + 0.5);
-      ctx.stroke();
-
-      // Persistence trail
-      ctx.drawImage(trail, 0, 0);
-
-      // Value readout (peak amplitude)
-      if (buf && buf.length > 0) {
-        let peak = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const abs = Math.abs(buf[i]);
-          if (abs > peak) peak = abs;
+        // Normalize samples to [0, 1] for the shader
+        const norm = normBuf.current;
+        for (let i = 0; i < displayLen; i++) {
+          norm[i] = (buf[trigIdx + i] - yMin) / range;
         }
-        ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
-        ctx.font = '10px "DM Mono", monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(peak.toFixed(3), w - 5, 13);
-      }
-    };
 
-    // ── Modern mode draw (clean utility) ──
-    const drawModern = () => {
-      const w = SCOPE_W;
-      const mh = SCOPE_H_MODERN;
-      const buf = buffersRef.current.get(nodeId);
-
-      ctx.fillStyle = '#111010';
-      ctx.fillRect(0, 0, w, mh);
-
-      // Subtle center line
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.12)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 2) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 2) + 0.5);
-      ctx.stroke();
-
-      // Quarter lines
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.05)';
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 4) + 0.5);
-      ctx.moveTo(0, Math.round(mh * 3 / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh * 3 / 4) + 0.5);
-      ctx.stroke();
-
-      if (!buf || buf.length < SCOPE_DISPLAY_SAMPLES) {
-        // "No signal" text
-        ctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
-        ctx.font = '9px "DM Mono", monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('no signal', w / 2, mh / 2 + 3);
-        return;
+        // Upload to waveform texture
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waveTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, displayLen, 1, 0,
+                      gl.RED, gl.FLOAT, norm.subarray(0, displayLen));
       }
 
-      const trigIdx = findTrigger(buf);
-      const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
-      const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
-      const yScale = mh / (yMax - yMin);
-      const pts = buildPath(buf, trigIdx, displayLen, w, mh, yMin, yScale);
+      // ── Render ──
+      gl.useProgram(program);
+      gl.bindVertexArray(vao);
 
-      // Filled area under curve (subtle)
-      ctx.fillStyle = accentRgba(0.06);
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, mh);
-      for (const p of pts) ctx.lineTo(p.x, p.y);
-      ctx.lineTo(pts[pts.length - 1].x, mh);
-      ctx.closePath();
-      ctx.fill();
+      gl.uniform1i(u.waveform, 0);
+      gl.uniform1i(u.prevFrame, 1);
+      gl.uniform3f(u.accent, ar, ag, ab);
+      gl.uniform1f(u.numSamples, SCOPE_DISPLAY_SAMPLES);
+      gl.uniform1f(u.hasSignal, hasSignal ? 1.0 : 0.0);
+      gl.uniform1f(u.mode, isClassicNow ? 1.0 : 0.0);
 
-      // Main trace
-      ctx.strokeStyle = accentRgba(0.7);
-      ctx.lineWidth = 1.5;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      strokePath(ctx, pts);
+      if (isClassicNow) {
+        // Classic: render to FBO with persistence feedback
+        const readIdx = state.ping;
+        const writeIdx = 1 - state.ping;
 
-      // Value readout (peak amplitude)
-      let peak = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const abs = Math.abs(buf[i]);
-        if (abs > peak) peak = abs;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIdx].fbo);
+        gl.viewport(0, 0, SCOPE_W, SCOPE_H);
+        gl.uniform2f(u.resolution, SCOPE_W, SCOPE_H);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waveTex);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, fbos[readIdx].tex);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Blit FBO to screen
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbos[writeIdx].fbo);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+        gl.blitFramebuffer(0, 0, SCOPE_W, SCOPE_H,
+                           0, 0, SCOPE_W, SCOPE_H,
+                           gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        state.ping = writeIdx;
+      } else {
+        // Modern: render directly to screen
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, SCOPE_W, ch);
+        gl.uniform2f(u.resolution, SCOPE_W, ch);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waveTex);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, fbos[0].tex); // dummy, not sampled
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
-      ctx.fillStyle = 'rgba(212, 207, 200, 0.4)';
-      ctx.font = '9px "DM Mono", monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(peak.toFixed(3), w - 4, 10);
 
-      // Min/max range
-      ctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
-      ctx.textAlign = 'left';
-      ctx.fillText(yMin.toFixed(1), 4, mh - 4);
-      ctx.fillText(yMax.toFixed(1), 4, 10);
-    };
+      // ── Text overlay ──
+      if (tctx) {
+        tctx.clearRect(0, 0, SCOPE_W, ch);
 
-    const draw = () => {
-      if (modeRef.current === 'classic') drawClassic();
-      else drawModern();
+        if (hasSignal) {
+          let peak = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const a = Math.abs(buf[i]);
+            if (a > peak) peak = a;
+          }
+
+          if (isClassicNow) {
+            tctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
+            tctx.font = '10px "DM Mono", monospace';
+            tctx.textAlign = 'right';
+            tctx.fillText(peak.toFixed(3), SCOPE_W - 5, 13);
+          } else {
+            tctx.fillStyle = 'rgba(212, 207, 200, 0.4)';
+            tctx.font = '9px "DM Mono", monospace';
+            tctx.textAlign = 'right';
+            tctx.fillText(peak.toFixed(3), SCOPE_W - 4, 10);
+
+            tctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
+            tctx.textAlign = 'left';
+            tctx.fillText(yMin.toFixed(1), 4, ch - 4);
+            tctx.fillText(yMax.toFixed(1), 4, 10);
+          }
+        } else if (!isClassicNow) {
+          tctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
+          tctx.font = '9px "DM Mono", monospace';
+          tctx.textAlign = 'center';
+          tctx.fillText('no signal', SCOPE_W / 2, ch / 2 + 3);
+        }
+      }
+
       animRef.current = requestAnimationFrame(draw);
     };
 
     animRef.current = requestAnimationFrame(draw);
+
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
+      gl.deleteProgram(program);
+      gl.deleteTexture(waveTex);
+      gl.deleteBuffer(vbo);
+      gl.deleteVertexArray(vao);
+      for (const f of fbos) {
+        gl.deleteFramebuffer(f.fbo);
+        gl.deleteTexture(f.tex);
+      }
+      glStateRef.current = null;
     };
   }, [buffersRef, nodeId, bufferSize, accentColor]);
 
@@ -1163,6 +1334,16 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         className="scope-canvas"
         width={SCOPE_W}
         height={h}
+      />
+      <canvas
+        ref={textCanvasRef}
+        width={SCOPE_W}
+        height={h}
+        style={{
+          position: 'absolute', top: 0, left: 0,
+          display: 'block', width: '100%',
+          height: `${h}px`, pointerEvents: 'none',
+        }}
       />
     </div>
   );

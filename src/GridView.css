@@ -1843,6 +1843,7 @@
 .scope-body {
   display: flex;
   flex-direction: column;
+  position: relative; /* for text overlay positioning */
 }
 
 .scope-canvas {
