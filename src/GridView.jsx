@@ -228,6 +228,21 @@ const NODE_SCHEMA = {
       amp:  { label: 'amp',  min: 0,    max: 1,    step: 0.01, val: 0.5 },
     },
   },
+  lfo: {
+    label: 'LFO',
+    desc: 'low-freq oscillator',
+    accent: '#7aab88',
+    synthDef: 'lfo',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'phase'],
+    params: {
+      freq:     { label: 'rate', min: 0.01, max: 40, step: 0.01, val: 1 },
+      amp:      { label: 'amp',  min: 0,    max: 1,  step: 0.01, val: 0.5 },
+      waveform: { label: 'wave', min: 0,    max: 3,  step: 1,    val: 0 },
+      width:    { label: 'width',min: 0,    max: 1,  step: 0.01, val: 0.5 },
+    },
+  },
   white_noise_osc: {
     label: 'White Noise',
     desc: 'white noise',
@@ -787,6 +802,12 @@ const MODULE_CATEGORIES = [
     label: 'Scripting',
     desc: 'code & patterns',
     types: ['script'],
+  },
+  {
+    id: 'modulation',
+    label: 'Modulation',
+    desc: 'LFOs & modulators',
+    types: ['lfo', 'lfnoise0_osc', 'lfnoise1_osc', 'lfnoise2_osc'],
   },
   {
     id: 'control',
@@ -3034,13 +3055,15 @@ export default function GridView() {
                   <span className="param-val">
                     {isAudioRateMod
                       ? (key === 'freq' ? 'FM' : key === 'amp' ? 'AM' : 'PM')
-                      : key === 'freq' && node.quantize
-                        ? freqToNoteName(displayVal)
-                        : displayVal >= 100
-                          ? Math.round(displayVal)
-                          : displayVal.toFixed(
-                              def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                            )}
+                      : key === 'waveform'
+                        ? ['sin', 'tri', 'saw', 'pls'][Math.round(displayVal)] ?? displayVal
+                        : key === 'freq' && node.quantize
+                          ? freqToNoteName(displayVal)
+                          : displayVal >= 100
+                            ? Math.round(displayVal)
+                            : displayVal.toFixed(
+                                def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                              )}
                   </span>
                 </div>
               );
