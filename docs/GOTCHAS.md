@@ -250,4 +250,29 @@ As defense-in-depth, a 5 ms `Lag.kr` was also added to the sine oscillator's `am
 
 ---
 
+## 10. Scope Jitter When Polling Faster Than the Buffer Fill Time
+
+**Symptom:** The oscilloscope waveform jitters wildly and shows double/ghost traces in CRT mode, even for a pure steady-state sine wave that should display as a stable curve.
+
+**Root cause:** The scope synthdef (`ora_scope`) uses `BufWr` + `Phasor` to continuously write audio into a circular buffer of 1024 frames. At 44 100 Hz, the Phasor takes ~23.2 ms to overwrite the entire buffer. If the UI polls (`/b_getn`) faster than that (e.g., every 16 ms / 60 Hz), each read captures a buffer that is only partially overwritten — the first N samples are from the current pass and the remaining samples are stale from the previous pass. This "seam" causes:
+
+1. **Trigger instability** — the zero-crossing search finds different positions each frame.
+2. **Auto-scale bounce** — `yMin`/`yMax` shift because the stale and fresh segments have different envelopes.
+3. **Persistence ghost traces** — the CRT phosphor trail shows the waveform at its old shifted position alongside the current one.
+
+**Fix:** Set the polling interval to at least the buffer fill time. For a 1024-frame buffer at 44 100 Hz, 33 ms (≈30 Hz) guarantees the Phasor has fully overwritten the buffer between reads:
+
+```javascript
+// gridEngine.js — scope polling interval
+this._scopePollingInterval = setInterval(() => {
+  // ...
+}, 33); // ~30 Hz — must be >= 1024/44100 ≈ 23 ms
+```
+
+If you increase `SCOPE_BUF_FRAMES`, increase the polling interval proportionally.
+
+**Reference:** `src/audio/gridEngine.js:388-395`, `scripts/generate-scope-synthdef.cjs`
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

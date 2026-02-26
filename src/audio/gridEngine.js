@@ -392,7 +392,7 @@ export class GridEngine {
             this.sonic.send('/b_getn', buf, 0, GridEngine.SCOPE_BUF_FRAMES);
           } catch { /* ignore */ }
         }
-      }, 16); // ~60 Hz — matches requestAnimationFrame
+      }, 33); // ~30 Hz — must be >= buffer fill time (1024/44100 ≈ 23ms)
     }
 
     return bufnum;

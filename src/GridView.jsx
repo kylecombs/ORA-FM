@@ -948,9 +948,14 @@ float waveDist() {
   float sR = texture(u_waveform, vec2(x + texel, 0.5)).r;
   float sL = texture(u_waveform, vec2(x - texel, 0.5)).r;
 
-  float d = abs(y - s);
+  // Perpendicular distance to local tangent line — handles slopes
+  // without thinning the trace at steep transitions
+  float dsdx = (sR - sL) / (2.0 * texel);
+  float slope_px = dsdx * u_resolution.y / u_resolution.x;
+  float d = abs(y - s) * u_resolution.y / sqrt(1.0 + slope_px * slope_px);
 
-  // Steep slope: pixel between consecutive samples -> on the line
+  // Bounding-box fill between adjacent samples — catches vertical
+  // segments at sharp edges and step discontinuities
   float mn = min(s, sR);
   float mx = max(s, sR);
   if (y >= mn && y <= mx) d = 0.0;
@@ -959,7 +964,7 @@ float waveDist() {
   mx = max(sL, s);
   if (y >= mn && y <= mx) d = 0.0;
 
-  return d * u_resolution.y;
+  return d;
 }
 
 void main() {
