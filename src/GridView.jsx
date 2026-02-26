@@ -4,6 +4,7 @@ import { ScriptRunner } from './audio/scriptRunner';
 import { EnvelopeRunner } from './audio/envelopeRunner';
 import { MidiListener, getInputDevices, onDeviceChange, initMidi } from './audio/midiListener';
 import BreakpointEditor from './BreakpointEditor';
+import WaveformDisplay from './WaveformDisplay';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { createTheme } from '@uiw/codemirror-themes';
@@ -367,6 +368,24 @@ const NODE_SCHEMA = {
       release: { label: 'rel',  min: 0,  max: 5,  step: 0.1,  val: 1 },
     },
   },
+  // ── Sample player ──────────────────────────────────────
+  sample_player: {
+    label: 'Sampler',
+    desc: 'sample player',
+    accent: '#c89a60',
+    synthDef: 'sample_player',
+    width: 280,
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['rate', 'amp'],
+    params: {
+      rate:      { label: 'rate', min: -4, max: 4, step: 0.01, val: 1 },
+      amp:       { label: 'amp',  min: 0,  max: 1, step: 0.01, val: 0.5 },
+      start_pos: { label: 'start', min: 0, max: 1, step: 0.001, val: 0, hidden: true },
+      end_pos:   { label: 'end',   min: 0, max: 1, step: 0.001, val: 1, hidden: true },
+      loop:      { label: 'loop',  min: 0, max: 1, step: 1, val: 1, hidden: true },
+    },
+  },
   // ── FX modules ─────────────────────────────────────────
   fx_reverb: {
     label: 'Reverb',
@@ -723,6 +742,12 @@ const MODULE_CATEGORIES = [
     types: ['sine', 'sine_osc', 'saw'],
   },
   {
+    id: 'samplers',
+    label: 'Samplers',
+    desc: 'sample playback',
+    types: ['sample_player'],
+  },
+  {
     id: 'instruments',
     label: 'Instruments',
     desc: 'melodic voices',
@@ -839,6 +864,7 @@ const MOD_DEPTH_SCALES = {
   bwfreq:   400,    // amp 0.5 → ±200 Hz bandwidth deviation
   density:  20,     // amp 0.5 → ±10 impulses/sec density variation
   chaos:    0.5,    // amp 0.5 → ±0.25 chaos param deviation (range 1–2)
+  rate:     2,      // amp 0.5 → ±1.0 playback rate deviation
 };
 
 // ── Compute which nodes are "live" (reachable from AudioOut) ──
@@ -1180,6 +1206,13 @@ export default function GridView() {
   const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array ring buffer
   const scopeWriteIdxRef = useRef(new Map()); // nodeId → write index
   const SCOPE_BUFFER_SIZE = 128;
+
+  // Sample player state
+  const [sampleData, setSampleData] = useState({}); // nodeId → { audioData: Float32Array, name: string, duration: number, channels: number }
+  const [samplePlayheads, setSamplePlayheads] = useState({}); // nodeId → { trigTime, rate, startPos, endPos, loop, duration }
+  const sampleFileInputRef = useRef(null);
+  const sampleLoadTargetRef = useRef(null); // nodeId being loaded for
+  const sampleAnimRef = useRef(null);
 
   // Auto-scroll print console when new logs arrive
   useEffect(() => {
@@ -1674,6 +1707,11 @@ export default function GridView() {
         if (node.quantize && playParams.freq != null) {
           playParams.freq = quantizeFreq(playParams.freq);
         }
+        // Inject buffer number for sample_player modules
+        if (node.type === 'sample_player') {
+          const bufNum = engine.getBuffer(id);
+          if (bufNum != null) playParams.buf = bufNum;
+        }
         engine.play(id, schema.synthDef, playParams);
       } else {
         engine.setParam(id, 'pan', pan);
@@ -1923,10 +1961,13 @@ export default function GridView() {
     (id) => {
       engineRef.current?.stop(id);
       engineRef.current?.stopScope(id);
+      engineRef.current?.freeBuffer(id);
       scriptRunnerRef.current?.stop(id);
       envelopeRunnerRef.current?.stop(id);
       scopeBuffersRef.current.delete(id);
       scopeWriteIdxRef.current.delete(id);
+      setSampleData((prev) => { const next = { ...prev }; delete next[id]; return next; });
+      setSamplePlayheads((prev) => { const next = { ...prev }; delete next[id]; return next; });
       // Stop MIDI listener if this was a midi_in node
       const midiListener = midiListenersRef.current.get(id);
       if (midiListener) {
@@ -2050,6 +2091,232 @@ export default function GridView() {
       return { ...prev, [nodeId]: { ...node, scopeMode: next } };
     });
   }, []);
+
+  // ── Sample player handlers ──────────────────────────────
+  const handleSampleFileSelect = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    const nodeId = sampleLoadTargetRef.current;
+    if (!file || nodeId == null) return;
+    e.target.value = ''; // reset input
+
+    const engine = engineRef.current;
+    if (!engine?.booted) return;
+
+    try {
+      // Read file as ArrayBuffer for both decoding and sending to engine
+      const arrayBuf = await file.arrayBuffer();
+
+      // Decode audio for waveform display
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
+      audioCtx.close();
+
+      // Mix down to mono for waveform display
+      const ch0 = decoded.getChannelData(0);
+      let mono;
+      if (decoded.numberOfChannels >= 2) {
+        const ch1 = decoded.getChannelData(1);
+        mono = new Float32Array(ch0.length);
+        for (let i = 0; i < ch0.length; i++) {
+          mono[i] = (ch0[i] + ch1[i]) * 0.5;
+        }
+      } else {
+        mono = ch0;
+      }
+
+      // Load into engine buffer
+      const data = new Uint8Array(arrayBuf);
+      const bufNum = engine.loadSampleBuffer(nodeId, data);
+
+      // Store waveform data
+      setSampleData((prev) => ({
+        ...prev,
+        [nodeId]: {
+          audioData: mono,
+          name: file.name.replace(/\.[^.]+$/, ''),
+          duration: decoded.duration,
+          channels: decoded.numberOfChannels,
+          bufNum,
+        },
+      }));
+
+      // Update the synth's buf parameter if playing
+      if (bufNum != null) {
+        engine.setParam(nodeId, 'buf', bufNum);
+      }
+
+      // Reset region to full sample
+      setNodes((prev) => {
+        const node = prev[nodeId];
+        if (!node) return prev;
+        return {
+          ...prev,
+          [nodeId]: {
+            ...node,
+            params: { ...node.params, start_pos: 0, end_pos: 1 },
+            sampleName: file.name.replace(/\.[^.]+$/, ''),
+          },
+        };
+      });
+    } catch (err) {
+      console.error('[SamplePlayer] Failed to load sample:', err);
+      setStatus(`Error loading sample: ${err.message}`);
+    }
+  }, []);
+
+  const handleLoadBuiltinSample = useCallback(async (nodeId, sampleName) => {
+    const engine = engineRef.current;
+    if (!engine?.booted) return;
+
+    try {
+      // Fetch and decode for waveform display
+      const resp = await fetch(`/supersonic/samples/${sampleName}.flac`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const arrayBuf = await resp.arrayBuffer();
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
+      audioCtx.close();
+
+      const ch0 = decoded.getChannelData(0);
+      let mono;
+      if (decoded.numberOfChannels >= 2) {
+        const ch1 = decoded.getChannelData(1);
+        mono = new Float32Array(ch0.length);
+        for (let i = 0; i < ch0.length; i++) mono[i] = (ch0[i] + ch1[i]) * 0.5;
+      } else {
+        mono = ch0;
+      }
+
+      // Load into engine
+      const bufNum = await engine.loadBuiltinSample(nodeId, sampleName);
+
+      setSampleData((prev) => ({
+        ...prev,
+        [nodeId]: {
+          audioData: mono,
+          name: sampleName,
+          duration: decoded.duration,
+          channels: decoded.numberOfChannels,
+          bufNum,
+        },
+      }));
+
+      if (bufNum != null) {
+        engine.setParam(nodeId, 'buf', bufNum);
+      }
+
+      setNodes((prev) => {
+        const node = prev[nodeId];
+        if (!node) return prev;
+        return {
+          ...prev,
+          [nodeId]: {
+            ...node,
+            params: { ...node.params, start_pos: 0, end_pos: 1 },
+            sampleName,
+          },
+        };
+      });
+    } catch (err) {
+      console.error(`[SamplePlayer] Failed to load builtin sample "${sampleName}":`, err);
+      setStatus(`Error loading sample: ${err.message}`);
+    }
+  }, []);
+
+  const handleSampleRegionChange = useCallback((nodeId, start, end) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      if (!node) return prev;
+      return {
+        ...prev,
+        [nodeId]: {
+          ...node,
+          params: { ...node.params, start_pos: start, end_pos: end },
+        },
+      };
+    });
+    engineRef.current?.setParam(nodeId, 'start_pos', start);
+    engineRef.current?.setParam(nodeId, 'end_pos', end);
+  }, []);
+
+  const handleSampleTrigger = useCallback((nodeId) => {
+    const engine = engineRef.current;
+    if (!engine?.booted) return;
+    engine.triggerSample(nodeId);
+
+    // Track playhead animation
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      if (!node) return prev;
+      const sd = sampleData[nodeId];
+      const startPos = node.params.start_pos ?? 0;
+      const endPos = node.params.end_pos ?? 1;
+      const rate = node.params.rate ?? 1;
+      const loop = node.params.loop ?? 1;
+      const duration = sd?.duration ?? 1;
+
+      setSamplePlayheads((ph) => ({
+        ...ph,
+        [nodeId]: {
+          trigTime: performance.now(),
+          rate,
+          startPos,
+          endPos,
+          loop: loop > 0.5,
+          duration,
+        },
+      }));
+      return prev;
+    });
+  }, [sampleData]);
+
+  const handleSampleLoopToggle = useCallback((nodeId) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      if (!node) return prev;
+      const newLoop = (node.params.loop ?? 1) > 0.5 ? 0 : 1;
+      engineRef.current?.setParam(nodeId, 'loop', newLoop);
+      return {
+        ...prev,
+        [nodeId]: {
+          ...node,
+          params: { ...node.params, loop: newLoop },
+        },
+      };
+    });
+  }, []);
+
+  // Playhead animation loop
+  useEffect(() => {
+    const animate = () => {
+      sampleAnimRef.current = requestAnimationFrame(animate);
+      // Force re-render to update playhead positions
+      // Only if there are active playheads
+      const playheads = Object.entries(samplePlayheads);
+      if (playheads.length === 0) return;
+
+      // Check if any playhead is still active (non-looping ones expire)
+      let changed = false;
+      for (const [nodeId, ph] of playheads) {
+        if (!ph.loop) {
+          const elapsed = (performance.now() - ph.trigTime) / 1000;
+          const regionDur = (ph.endPos - ph.startPos) * ph.duration / Math.abs(ph.rate || 1);
+          if (elapsed > regionDur) {
+            changed = true;
+          }
+        }
+      }
+      // Trigger repaint by updating state
+      setSamplePlayheads((prev) => ({ ...prev }));
+    };
+    if (Object.keys(samplePlayheads).length > 0) {
+      sampleAnimRef.current = requestAnimationFrame(animate);
+    }
+    return () => {
+      if (sampleAnimRef.current) cancelAnimationFrame(sampleAnimRef.current);
+    };
+  }, [Object.keys(samplePlayheads).length > 0]);
 
   // ── Envelope handlers ──────────────────────────────────
   const handleBreakpointsChange = useCallback((nodeId, breakpoints, curves) => {
@@ -2240,6 +2507,7 @@ export default function GridView() {
         if (node.midiChannel != null) entry.midiChannel = node.midiChannel;
         if (node.midiCcNumber != null) entry.midiCcNumber = node.midiCcNumber;
         if (node.midiDeviceId != null) entry.midiDeviceId = node.midiDeviceId;
+        if (node.sampleName != null) entry.sampleName = node.sampleName;
         return entry;
       }),
       connections: connections.map((c) => {
@@ -2339,6 +2607,14 @@ export default function GridView() {
           if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
           if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
           if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
+          if (n.sampleName != null) restoredNodes[n.id].sampleName = n.sampleName;
+        }
+
+        // Re-load samples for sample_player nodes
+        for (const n of patch.nodes) {
+          if (n.type === 'sample_player' && n.sampleName) {
+            handleLoadBuiltinSample(n.id, n.sampleName);
+          }
         }
 
         // Restore connections
@@ -2379,7 +2655,7 @@ export default function GridView() {
       if (conn.toParam !== 'trig') continue;
 
       const targetNode = nodes[conn.toNodeId];
-      if (!targetNode || targetNode.type !== 'envelope') continue;
+      if (!targetNode || (targetNode.type !== 'envelope' && targetNode.type !== 'sample_player')) continue;
 
       const sourceNode = nodes[conn.fromNodeId];
       if (!sourceNode) continue;
@@ -2395,29 +2671,33 @@ export default function GridView() {
 
       // Rising edge: crossed above 0.5
       if (value >= 0.5 && prevValue < 0.5) {
-        const runner = envelopeRunnerRef.current;
-        if (runner) {
-          const envId = conn.toNodeId;
-          runner.trigger(
-            envId,
-            targetNode.breakpoints,
-            targetNode.curves,
-            targetNode.duration,
-            targetNode.loop
-          );
-          setRunningEnvelopes((s) => new Set(s).add(envId));
+        if (targetNode.type === 'envelope') {
+          const runner = envelopeRunnerRef.current;
+          if (runner) {
+            const envId = conn.toNodeId;
+            runner.trigger(
+              envId,
+              targetNode.breakpoints,
+              targetNode.curves,
+              targetNode.duration,
+              targetNode.loop
+            );
+            setRunningEnvelopes((s) => new Set(s).add(envId));
 
-          // Poll for completion to clear running state
-          const check = setInterval(() => {
-            if (!envelopeRunnerRef.current?.isRunning(envId)) {
-              clearInterval(check);
-              setRunningEnvelopes((s) => {
-                const next = new Set(s);
-                next.delete(envId);
-                return next;
-              });
-            }
-          }, 100);
+            // Poll for completion to clear running state
+            const check = setInterval(() => {
+              if (!envelopeRunnerRef.current?.isRunning(envId)) {
+                clearInterval(check);
+                setRunningEnvelopes((s) => {
+                  const next = new Set(s);
+                  next.delete(envId);
+                  return next;
+                });
+              }
+            }, 100);
+          }
+        } else if (targetNode.type === 'sample_player') {
+          handleSampleTrigger(conn.toNodeId);
         }
       }
 
@@ -2482,7 +2762,7 @@ export default function GridView() {
 
   // ── Node dragging ─────────────────────────────────────
   const startDrag = useCallback((e, nodeId) => {
-    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle') || e.target.closest('.script-resize-handle')) return;
+    if (e.target.closest('.node-port') || e.target.closest('button') || e.target.closest('input') || e.target.closest('select') || e.target.closest('.script-code-preview') || e.target.closest('.bp-editor-wrap') || e.target.closest('.bang-circle') || e.target.closest('.bang-resize-handle') || e.target.closest('.script-resize-handle') || e.target.closest('.sampler-waveform-canvas')) return;
     didDragRef.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2721,6 +3001,7 @@ export default function GridView() {
     const isEnvelope = node.type === 'envelope';
     const isBang = node.type === 'bang';
     const isMidiIn = node.type === 'midi_in';
+    const isSampler = node.type === 'sample_player';
     const nodeWidth = getNodeWidth(node);
 
     // Check if this module has any modulation output connections
@@ -2756,7 +3037,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${isSampler ? ' sampler' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2798,6 +3079,18 @@ export default function GridView() {
           <div
             className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
             style={{ top: HEADER_H + 60 - 4 }}
+            onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
+            title="trigger input"
+          >
+            <span className="port-label port-label-in">trig</span>
+          </div>
+        )}
+
+        {/* Sample player trigger input port */}
+        {isSampler && (
+          <div
+            className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
+            style={{ top: HEADER_H + 40 + 80 / 2 - 4 }}
             onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
             title="trigger input"
           >
@@ -2962,6 +3255,86 @@ export default function GridView() {
           </div>
         )}
 
+        {/* Sample player body */}
+        {isSampler && (() => {
+          const sd = sampleData[node.id];
+          const startP = node.params.start_pos ?? 0;
+          const endP = node.params.end_pos ?? 1;
+          const loopOn = (node.params.loop ?? 1) > 0.5;
+          const rate = node.params.rate ?? 1;
+
+          // Compute playhead position from JS-side timing
+          let phPos = null;
+          const ph = samplePlayheads[node.id];
+          if (ph && sd) {
+            const elapsed = (performance.now() - ph.trigTime) / 1000;
+            const regionDur = (ph.endPos - ph.startPos) * ph.duration / Math.abs(ph.rate || 1);
+            if (regionDur > 0) {
+              if (ph.loop) {
+                const progress = (elapsed % regionDur) / regionDur;
+                phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
+              } else if (elapsed < regionDur) {
+                const progress = elapsed / regionDur;
+                phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
+              }
+            }
+          }
+
+          return (
+            <div className="sampler-body">
+              <WaveformDisplay
+                audioData={sd?.audioData ?? null}
+                startPos={startP}
+                endPos={endP}
+                onRegionChange={(s, e) => handleSampleRegionChange(node.id, s, e)}
+                accentColor={schema.accent}
+                width={(schema.width || 280) - 22}
+                height={80}
+                playheadPos={phPos}
+                sampleName={sd?.name ?? null}
+              />
+              <div className="sampler-controls">
+                <button
+                  className="sampler-trig-btn"
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    handleSampleTrigger(node.id);
+                  }}
+                  title="Trigger playback"
+                >
+                  &#9654;
+                </button>
+                <button
+                  className={`sampler-loop-btn${loopOn ? ' active' : ''}`}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    handleSampleLoopToggle(node.id);
+                  }}
+                  title={loopOn ? 'Loop: ON' : 'Loop: OFF'}
+                >
+                  loop
+                </button>
+                <button
+                  className="sampler-load-btn"
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    sampleLoadTargetRef.current = node.id;
+                    sampleFileInputRef.current?.click();
+                  }}
+                  title="Load audio file"
+                >
+                  load
+                </button>
+                {sd && (
+                  <span className="sampler-info">
+                    {sd.channels === 2 ? 'st' : 'mo'} · {sd.duration.toFixed(1)}s
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Parameters (skip hidden params, skip for envelope) */}
         {!isEnvelope && !isBang && Object.keys(schema.params).length > 0 && (
           <div className="node-params">
@@ -3104,6 +3477,13 @@ export default function GridView() {
             accept=".json"
             style={{ display: 'none' }}
             onChange={handleFileSelect}
+          />
+          <input
+            ref={sampleFileInputRef}
+            type="file"
+            accept="audio/*,.flac,.wav,.ogg,.mp3,.aif,.aiff"
+            style={{ display: 'none' }}
+            onChange={handleSampleFileSelect}
           />
         </div>
 
@@ -3373,6 +3753,83 @@ export default function GridView() {
                             {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
                           </div>
                         )}
+                      </div>
+                    </div>
+                  ) : selNode.type === 'sample_player' ? (
+                    <div className="details-body">
+                      <div className="sampler-details">
+                        <div className="sampler-detail-section">
+                          <span className="sampler-detail-label">Built-in samples</span>
+                          <select
+                            className="sampler-sample-select"
+                            value=""
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleLoadBuiltinSample(selNode.id, e.target.value);
+                              }
+                            }}
+                          >
+                            <option value="">Select a sample…</option>
+                            <optgroup label="Ambient">
+                              {['ambi_choir', 'ambi_dark_woosh', 'ambi_drone', 'ambi_glass_hum',
+                                'ambi_glass_rub', 'ambi_haunted_hum', 'ambi_lunar_land', 'ambi_piano',
+                                'ambi_sauna', 'ambi_soft_buzz', 'ambi_swoosh'].map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Drums">
+                              {['bd_808', 'bd_boom', 'bd_fat', 'bd_haus', 'bd_klub', 'bd_pure',
+                                'bd_tek', 'bd_zum', 'drum_bass_hard', 'drum_bass_soft',
+                                'drum_cymbal_closed', 'drum_cymbal_open', 'drum_heavy_kick',
+                                'drum_snare_hard', 'drum_snare_soft', 'drum_roll',
+                                'drum_tom_hi_hard', 'drum_tom_lo_hard'].map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Electronic">
+                              {['elec_beep', 'elec_bell', 'elec_blip', 'elec_bong',
+                                'elec_chime', 'elec_cymbal', 'elec_flip', 'elec_ping',
+                                'elec_pop', 'elec_snare', 'elec_twang', 'elec_wood'].map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Guitar">
+                              {['guit_e_fifths', 'guit_e_slide', 'guit_em9', 'guit_harmonics'].map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Glitch">
+                              {['glitch_bass_g', 'glitch_perc1', 'glitch_perc2', 'glitch_perc3',
+                                'glitch_perc4', 'glitch_perc5', 'glitch_robot1', 'glitch_robot2'].map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </optgroup>
+                          </select>
+                        </div>
+                        <div className="sampler-detail-section">
+                          <span className="sampler-detail-label">Load from file</span>
+                          <button
+                            className="sampler-detail-load-btn"
+                            onClick={() => {
+                              sampleLoadTargetRef.current = selNode.id;
+                              sampleFileInputRef.current?.click();
+                            }}
+                          >
+                            Choose audio file…
+                          </button>
+                        </div>
+                        {sampleData[selNode.id] && (
+                          <div className="sampler-detail-info">
+                            <div>Sample: {sampleData[selNode.id].name}</div>
+                            <div>Duration: {sampleData[selNode.id].duration.toFixed(2)}s</div>
+                            <div>Channels: {sampleData[selNode.id].channels} ({sampleData[selNode.id].channels === 2 ? 'stereo' : 'mono'})</div>
+                            <div>Region: {((selNode.params.start_pos ?? 0) * 100).toFixed(1)}% – {((selNode.params.end_pos ?? 1) * 100).toFixed(1)}%</div>
+                          </div>
+                        )}
+                        <div className="print-hint">
+                          Load a sample, then drag handles on the waveform to select a playback region.
+                          Use the trigger button or connect a bang/envelope to the trig port.
+                        </div>
                       </div>
                     </div>
                   ) : selNode.type === 'print' ? (

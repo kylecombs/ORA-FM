@@ -250,4 +250,27 @@ As defense-in-depth, a 5 ms `Lag.kr` was also added to the sine oscillator's `am
 
 ---
 
+## 10. SynthDefs Must Be Built at Runtime When sclang Is Unavailable
+
+**Symptom:** Need a custom SynthDef (e.g. sample_player with BufRd, Phasor, region selection) but `sclang` is not installed in the deployment/build environment, so `npm run build:synthdefs` cannot compile `.scd` files.
+
+**Root cause:** SynthDef `.scsyndef` files are binary and can only be produced by SuperCollider's `sclang` compiler. The deployment environment (CI, cloud IDE, etc.) typically does not have SuperCollider installed.
+
+**Fix:** Build the SynthDef binary in JavaScript using the documented SCgf v2 format and send it via `/d_recv` at engine boot time. The binary format is:
+- Header: `"SCgf"` + version (int32) + count (int16)
+- Per synthdef: name (pstring) + constants + parameters + UGen graph
+- All integers are big-endian; floats are IEEE 754 big-endian
+
+```javascript
+import { buildSamplePlayerDef } from './buildSamplePlayerDef';
+const bytes = buildSamplePlayerDef(); // returns Uint8Array
+sonic.send('/d_recv', bytes);
+```
+
+Keep the `.scd` source in `synthdefs/src/` for documentation and for environments where sclang is available.
+
+**Reference:** `src/audio/buildSamplePlayerDef.js`, `synthdefs/src/sample_player.scd`, `src/audio/gridEngine.js` (boot method)
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*
