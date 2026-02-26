@@ -1311,6 +1311,13 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       let yMin = 0, yMax = 1;
       let numSegments = 0;
 
+      // Reset state when signal is lost so reconnection starts fresh
+      if (!hasSignal && state.smoothYMin !== null) {
+        state.smoothYMin = null;
+        state.smoothYMax = null;
+        state.lastTrigIdx = -1;
+      }
+
       if (hasSignal) {
         const trig = findTrigger(buf, state.lastTrigIdx);
         const trigIdx = trig.index;
@@ -2047,6 +2054,7 @@ export default function GridView() {
         }
         if (nodes[id].type === 'scope') {
           engine.stopScope(nid);
+          scopeBuffersRef.current.delete(nid);
         }
         engine.stop(nid);
       }
@@ -2059,7 +2067,13 @@ export default function GridView() {
         const prev = prevRouting[id];
         const cur = nodeRouting[id];
         if (!prev || prev.inBus !== cur.inBus || prev.outBus !== cur.outBus) {
-  engine.stop(id);
+          // Clear stale scope data so the display resets during restart.
+          // Don't call stopScope here — it schedules a delayed /b_free that
+          // would race with the /b_alloc in startScope (Step 8).
+          if (nodes[id]?.type === 'scope') {
+            scopeBuffersRef.current.delete(id);
+          }
+          engine.stop(id);
         }
       }
     }

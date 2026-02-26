@@ -271,6 +271,16 @@ this._scopePollingInterval = setInterval(() => {
 
 If you increase `SCOPE_BUF_FRAMES`, increase the polling interval proportionally.
 
+## 11. Scope Display Freezes When Input Cable Is Disconnected
+
+**Symptom:** Disconnecting a cable from the scope's input leaves the waveform frozen on screen indefinitely instead of clearing. In CRT mode, the persistence trail never decays; in modern mode, the stale waveform line stays visible.
+
+**Root cause:** When the cable is removed, `rebuildGraph` correctly stops the scope synth and polling (via `stopScope`), but it did not clear the buffer data in `scopeBuffersRef`. The `ScopeCanvas` render loop checked `hasSignal = buf && buf.length >= SCOPE_DISPLAY_SAMPLES`, and since the stale `Float32Array` was still in the map, `hasSignal` remained true. The renderer kept building line geometry from the old data and drawing it every frame — in classic mode, the persistence FBO never decayed because fresh waveform was re-drawn on each frame.
+
+**Fix:** Clear `scopeBuffersRef.current.delete(nid)` in Step 5 of `rebuildGraph` (when the scope drops out of the `live` set) alongside the `stopScope()` call. Also clear in Step 6 (when FX routing changes force a scope restart) so the display resets during the restart window. Reset Y-axis smoothing state (`smoothYMin`, `smoothYMax`, `lastTrigIdx`) when `hasSignal` becomes false, so reconnection starts with fresh auto-scale bounds.
+
+**Reference:** `src/GridView.jsx` — Steps 5 and 6 of `rebuildGraph`, plus the `ScopeCanvas` draw loop's `!hasSignal` reset block.
+
 **Reference:** `src/audio/gridEngine.js:388-395`, `scripts/generate-scope-synthdef.cjs`
 
 ---
