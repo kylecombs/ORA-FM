@@ -1034,10 +1034,13 @@ void main() {
   float sigma = uSize / 4.0;
   float alpha;
   if (len < 0.001) {
-    alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) * 0.5 / max(sqrt(uSize), 0.001);
+    alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) * 0.5;
   } else {
     alpha = erf((len - xy.x) / SQRT2 / sigma) + erf(xy.x / SQRT2 / sigma);
-    alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) * 0.5 / len * uSize;
+    // sqrt normalization instead of linear (/ len * uSize) to reduce
+    // velocity-based dimming — keeps fast-moving zero-crossing regions
+    // visible at high frequencies while still dimming proportionally.
+    alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) * 0.5 * sqrt(uSize / max(len, uSize));
   }
   alpha *= uIntensity;
   fragColor = vec4(uColor * alpha, alpha);
@@ -1234,14 +1237,30 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
     const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
 
-    const state = { ping: 0, lastMode: null, smoothYMin: null, smoothYMax: null };
+    const state = { ping: 0, lastMode: null, smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
     glStateRef.current = state;
 
     const tctx = textCanvasRef.current?.getContext('2d');
 
     // ── Helpers ──
-    const findTrigger = (buf) => {
+    // Find rising zero-crossing with sub-sample interpolation and
+    // hysteresis: prefer a crossing within ±10 samples of the previous
+    // trigger to prevent the display from jumping between distant
+    // crossings (which causes "double tracing" in CRT persistence).
+    const findTrigger = (buf, prevTrigIdx) => {
       const end = buf.length - SCOPE_DISPLAY_SAMPLES;
+      // Hysteresis: search near previous trigger first
+      if (prevTrigIdx >= 0 && prevTrigIdx < end) {
+        const lo = Math.max(0, prevTrigIdx - 10);
+        const hi = Math.min(end - 1, prevTrigIdx + 10);
+        for (let i = lo; i < hi; i++) {
+          if (buf[i] <= 0 && buf[i + 1] > 0) {
+            const frac = -buf[i] / (buf[i + 1] - buf[i]);
+            return { index: i, frac };
+          }
+        }
+      }
+      // Fall back to first crossing
       for (let i = 0; i < end - 1; i++) {
         if (buf[i] <= 0 && buf[i + 1] > 0) {
           const frac = -buf[i] / (buf[i + 1] - buf[i]);
@@ -1293,8 +1312,9 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       let numSegments = 0;
 
       if (hasSignal) {
-        const trig = findTrigger(buf);
+        const trig = findTrigger(buf, state.lastTrigIdx);
         const trigIdx = trig.index;
+        state.lastTrigIdx = trigIdx;
         const trigFrac = trig.frac;
         const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
         const bounds = computeYBounds(buf, trigIdx, displayLen);
@@ -1370,15 +1390,15 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
 
           // Multi-pass glow: core → mid → outer
           gl.uniform1f(lineU.size, 1.5);
-          gl.uniform1f(lineU.intensity, 1.0);
+          gl.uniform1f(lineU.intensity, 1.4);
           gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
 
           gl.uniform1f(lineU.size, 4.0);
-          gl.uniform1f(lineU.intensity, 0.3);
+          gl.uniform1f(lineU.intensity, 0.45);
           gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
 
           gl.uniform1f(lineU.size, 8.0);
-          gl.uniform1f(lineU.intensity, 0.12);
+          gl.uniform1f(lineU.intensity, 0.18);
           gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
 
           gl.disable(gl.BLEND);
@@ -1439,7 +1459,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
           gl.uniform2f(lineU.resolution, SCOPE_W, ch);
           gl.uniform3f(lineU.color, ar, ag, ab);
           gl.uniform1f(lineU.size, 1.5);
-          gl.uniform1f(lineU.intensity, 0.8);
+          gl.uniform1f(lineU.intensity, 1.0);
           gl.bindVertexArray(lineVao);
           gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
           gl.disable(gl.BLEND);
