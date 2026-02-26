@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GridEngine } from './audio/gridEngine';
 import { ScriptRunner } from './audio/scriptRunner';
 import { EnvelopeRunner } from './audio/envelopeRunner';
-import { MidiListener, getInputDevices, onDeviceChange, initMidi } from './audio/midiListener';
+import { MidiListener, MidiClockIn, MidiClockOut, getInputDevices, getOutputDevices, onDeviceChange, initMidi } from './audio/midiListener';
 import BreakpointEditor from './BreakpointEditor';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -719,6 +719,19 @@ const NODE_SCHEMA = {
       value: { label: 'val', min: 0, max: 127, step: 1, val: 0, hidden: true },
     },
   },
+  clock: {
+    label: 'Clock',
+    desc: 'tempo · midi sync',
+    accent: '#e0a050',
+    synthDef: null,
+    category: 'control',
+    width: 186,
+    inputs: [],
+    outputs: ['beat'],
+    params: {
+      value: { label: 'beat', min: 0, max: 1, step: 1, val: 0, hidden: true },
+    },
+  },
   envelope: {
     label: 'Envelope',
     desc: 'breakpoint editor',
@@ -792,7 +805,7 @@ const MODULE_CATEGORIES = [
     id: 'control',
     label: 'Control',
     desc: 'modulation sources',
-    types: ['constant', 'envelope', 'bang', 'midi_in'],
+    types: ['constant', 'envelope', 'bang', 'midi_in', 'clock'],
   },
 ];
 
@@ -1221,6 +1234,13 @@ export default function GridView() {
   const midiListenersRef = useRef(new Map()); // nodeId → MidiListener
   const [midiDevices, setMidiDevices] = useState([]); // available MIDI input devices
   const [midiActivity, setMidiActivity] = useState({}); // nodeId → last activity timestamp
+  const [midiOutputDevices, setMidiOutputDevices] = useState([]);
+
+  // Clock module state
+  const clockTimersRef = useRef(new Map());    // nodeId → intervalId (internal clock)
+  const clockMidiInRef = useRef(new Map());    // nodeId → MidiClockIn
+  const clockMidiOutRef = useRef(new Map());   // nodeId → MidiClockOut
+  const [clockBeatFlash, setClockBeatFlash] = useState({}); // nodeId → timestamp
 
   // Scope (oscilloscope) state — ring buffer per scope node
     // Scope (oscilloscope) state — full waveform snapshot per scope node
@@ -1329,9 +1349,15 @@ export default function GridView() {
 
     // Initialize MIDI access
     initMidi().then((ok) => {
-      if (ok) setMidiDevices(getInputDevices());
+      if (ok) {
+        setMidiDevices(getInputDevices());
+        setMidiOutputDevices(getOutputDevices());
+      }
     });
-    const unsubDevices = onDeviceChange((devices) => setMidiDevices(devices));
+    const unsubDevices = onDeviceChange(() => {
+      setMidiDevices(getInputDevices());
+      setMidiOutputDevices(getOutputDevices());
+    });
 
     return () => {
       engineRef.current?.stopAll();
@@ -1342,6 +1368,15 @@ export default function GridView() {
         listener.stop();
       }
       midiListenersRef.current.clear();
+      // Stop all clock resources
+      for (const timerId of clockTimersRef.current.values()) {
+        clearInterval(timerId);
+      }
+      clockTimersRef.current.clear();
+      for (const ci of clockMidiInRef.current.values()) ci.stop();
+      clockMidiInRef.current.clear();
+      for (const co of clockMidiOutRef.current.values()) co.stop();
+      clockMidiOutRef.current.clear();
       unsubDevices();
     };
   }, []);
@@ -1410,6 +1445,150 @@ export default function GridView() {
         listener.stop();
         listeners.delete(nodeId);
       }
+    }
+  }, [nodes]);
+
+  // ── Clock module lifecycle ─────────────────────────────────
+  // Create/update/destroy internal timers + MIDI clock in/out
+  useEffect(() => {
+    const clockNodeIds = new Set();
+
+    for (const [id, node] of Object.entries(nodes)) {
+      if (node.type !== 'clock') continue;
+      const nodeId = Number(id);
+      clockNodeIds.add(nodeId);
+
+      // ── Internal clock timer ───────────────────────────
+      if (node.clockSource === 'internal' && node.clockRunning) {
+        const existing = clockTimersRef.current.get(nodeId);
+        // Clear old timer (we'll recreate at current BPM)
+        if (existing != null) clearInterval(existing);
+
+        const intervalMs = 60000 / (node.clockBpm || 120);
+        const timerId = setInterval(() => {
+          setNodes((prev) => {
+            const n = prev[nodeId];
+            if (!n || !n.clockRunning) return prev;
+            const beat = (n.clockBeatCount || 0) + 1;
+            return {
+              ...prev,
+              [nodeId]: {
+                ...n,
+                clockBeatCount: beat,
+                params: { ...n.params, value: beat % 2 === 0 ? 0 : 1 },
+              },
+            };
+          });
+          setClockBeatFlash((prev) => ({ ...prev, [nodeId]: Date.now() }));
+        }, intervalMs);
+        clockTimersRef.current.set(nodeId, timerId);
+
+        // Stop MIDI clock in if switching away from it
+        const existingIn = clockMidiInRef.current.get(nodeId);
+        if (existingIn) { existingIn.stop(); clockMidiInRef.current.delete(nodeId); }
+      } else if (node.clockSource === 'internal' && !node.clockRunning) {
+        // Clock stopped — kill the timer
+        const existing = clockTimersRef.current.get(nodeId);
+        if (existing != null) {
+          clearInterval(existing);
+          clockTimersRef.current.delete(nodeId);
+        }
+      }
+
+      // ── MIDI Clock In ───────────────────────────────────
+      if (node.clockSource === 'midi_in') {
+        // Kill internal timer if switching to midi_in
+        const existingTimer = clockTimersRef.current.get(nodeId);
+        if (existingTimer != null) {
+          clearInterval(existingTimer);
+          clockTimersRef.current.delete(nodeId);
+        }
+
+        let ci = clockMidiInRef.current.get(nodeId);
+        if (!ci) {
+          ci = new MidiClockIn({
+            deviceId: node.clockMidiInDeviceId || null,
+            onBpmChange: (bpm) => {
+              setNodes((prev) => {
+                const n = prev[nodeId];
+                if (!n) return prev;
+                return { ...prev, [nodeId]: { ...n, clockBpm: bpm } };
+              });
+            },
+            onBeat: (beatNum) => {
+              setNodes((prev) => {
+                const n = prev[nodeId];
+                if (!n) return prev;
+                return {
+                  ...prev,
+                  [nodeId]: {
+                    ...n,
+                    clockBeatCount: beatNum,
+                    params: { ...n.params, value: beatNum % 2 === 0 ? 0 : 1 },
+                  },
+                };
+              });
+              setClockBeatFlash((prev) => ({ ...prev, [nodeId]: Date.now() }));
+            },
+            onTransport: (state) => {
+              setNodes((prev) => {
+                const n = prev[nodeId];
+                if (!n) return prev;
+                return {
+                  ...prev,
+                  [nodeId]: {
+                    ...n,
+                    clockTransport: state === 'stop' ? 'stopped' : 'running',
+                    clockRunning: state !== 'stop',
+                  },
+                };
+              });
+            },
+          });
+          clockMidiInRef.current.set(nodeId, ci);
+          ci.start();
+        } else {
+          ci.setDeviceId(node.clockMidiInDeviceId || null);
+        }
+      } else {
+        // Not using MIDI in — stop if active
+        const ci = clockMidiInRef.current.get(nodeId);
+        if (ci) { ci.stop(); clockMidiInRef.current.delete(nodeId); }
+      }
+
+      // ── MIDI Clock Out ──────────────────────────────────
+      if (node.clockMidiOutEnabled && node.clockRunning) {
+        let co = clockMidiOutRef.current.get(nodeId);
+        if (!co) {
+          co = new MidiClockOut({
+            deviceId: node.clockMidiOutDeviceId || null,
+            bpm: node.clockBpm || 120,
+          });
+          clockMidiOutRef.current.set(nodeId, co);
+          co.start();
+        } else {
+          co.setBpm(node.clockBpm || 120);
+          co.setDeviceId(node.clockMidiOutDeviceId || null);
+          if (!co.isRunning) co.start();
+        }
+      } else {
+        const co = clockMidiOutRef.current.get(nodeId);
+        if (co) { co.stop(); clockMidiOutRef.current.delete(nodeId); }
+      }
+    }
+
+    // Remove resources for deleted nodes
+    for (const [nodeId] of clockTimersRef.current) {
+      if (!clockNodeIds.has(nodeId)) {
+        clearInterval(clockTimersRef.current.get(nodeId));
+        clockTimersRef.current.delete(nodeId);
+      }
+    }
+    for (const [nodeId, ci] of clockMidiInRef.current) {
+      if (!clockNodeIds.has(nodeId)) { ci.stop(); clockMidiInRef.current.delete(nodeId); }
+    }
+    for (const [nodeId, co] of clockMidiOutRef.current) {
+      if (!clockNodeIds.has(nodeId)) { co.stop(); clockMidiOutRef.current.delete(nodeId); }
     }
   }, [nodes]);
 
@@ -1938,6 +2117,16 @@ export default function GridView() {
       node.midiLastNote = null;   // last received note number
       node.midiGate = 0;          // note on/off state
     }
+    if (type === 'clock') {
+      node.clockBpm = 120;
+      node.clockSource = 'internal'; // 'internal' | 'midi_in'
+      node.clockMidiInDeviceId = null;
+      node.clockMidiOutEnabled = false;
+      node.clockMidiOutDeviceId = null;
+      node.clockRunning = false;
+      node.clockBeatCount = 0;
+      node.clockTransport = 'stopped'; // 'stopped' | 'running'
+    }
     if (type === 'print') {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
@@ -1969,6 +2158,16 @@ export default function GridView() {
         midiListener.stop();
         midiListenersRef.current.delete(id);
       }
+      // Stop clock resources if this was a clock node
+      const clockTimer = clockTimersRef.current.get(id);
+      if (clockTimer != null) {
+        clearInterval(clockTimer);
+        clockTimersRef.current.delete(id);
+      }
+      const clockIn = clockMidiInRef.current.get(id);
+      if (clockIn) { clockIn.stop(); clockMidiInRef.current.delete(id); }
+      const clockOut = clockMidiOutRef.current.get(id);
+      if (clockOut) { clockOut.stop(); clockMidiOutRef.current.delete(id); }
       setRunningScripts((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -2337,11 +2536,19 @@ export default function GridView() {
           listener.stop();
         }
         midiListenersRef.current.clear();
+        // Stop all clock resources
+        for (const timerId of clockTimersRef.current.values()) clearInterval(timerId);
+        clockTimersRef.current.clear();
+        for (const ci of clockMidiInRef.current.values()) ci.stop();
+        clockMidiInRef.current.clear();
+        for (const co of clockMidiOutRef.current.values()) co.stop();
+        clockMidiOutRef.current.clear();
         setRunningScripts(new Set());
         setRunningEnvelopes(new Set());
         setPrintLogs([]);
         setSelectedNodeId(null);
         setMidiActivity({});
+        setClockBeatFlash({});
         scopeBuffersRef.current.clear();
 
         // Restore nodes
@@ -2374,6 +2581,15 @@ export default function GridView() {
           if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
           if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
           if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
+          // Clock properties
+          if (n.clockBpm != null) restoredNodes[n.id].clockBpm = n.clockBpm;
+          if (n.clockSource != null) restoredNodes[n.id].clockSource = n.clockSource;
+          if (n.clockMidiInDeviceId != null) restoredNodes[n.id].clockMidiInDeviceId = n.clockMidiInDeviceId;
+          if (n.clockMidiOutEnabled) restoredNodes[n.id].clockMidiOutEnabled = true;
+          if (n.clockMidiOutDeviceId != null) restoredNodes[n.id].clockMidiOutDeviceId = n.clockMidiOutDeviceId;
+          restoredNodes[n.id].clockRunning = false;
+          restoredNodes[n.id].clockBeatCount = 0;
+          restoredNodes[n.id].clockTransport = 'stopped';
         }
 
         // Restore connections
@@ -2756,6 +2972,7 @@ export default function GridView() {
     const isEnvelope = node.type === 'envelope';
     const isBang = node.type === 'bang';
     const isMidiIn = node.type === 'midi_in';
+    const isClock = node.type === 'clock';
     const nodeWidth = getNodeWidth(node);
 
     // Check if this module has any modulation output connections
@@ -2791,7 +3008,7 @@ export default function GridView() {
       <div
         key={node.id}
         data-node-id={node.id}
-        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
+        className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn && !isClock ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${isClock ? ' clock-module' : ''}${node.type === 'scope' ? ` scope scope-${node.scopeMode || 'modern'}` : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}${isClock && node.clockRunning ? ' clock-running' : ''}`}
         style={{
           left: node.x,
           top: node.y,
@@ -2992,6 +3209,45 @@ export default function GridView() {
             </div>
             {(Date.now() - (midiActivity[node.id] || 0)) < 300 && (
               <div className="midi-in-activity" />
+            )}
+          </div>
+        )}
+
+        {/* Clock module display */}
+        {isClock && (
+          <div
+            className="clock-body"
+            onClick={() => setSelectedNodeId(node.id)}
+            title="Click to configure clock"
+          >
+            <div className="clock-bpm-display">
+              <span className="clock-bpm-value">{node.clockBpm || 120}</span>
+              <span className="clock-bpm-unit">BPM</span>
+            </div>
+            <div className="clock-transport-row">
+              <button
+                className={`clock-play-btn${node.clockRunning ? ' active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNodes((prev) => ({
+                    ...prev,
+                    [node.id]: {
+                      ...prev[node.id],
+                      clockRunning: !node.clockRunning,
+                      clockBeatCount: node.clockRunning ? 0 : prev[node.id].clockBeatCount,
+                    },
+                  }));
+                }}
+                title={node.clockRunning ? 'Stop' : 'Start'}
+              >
+                {node.clockRunning ? '\u25A0' : '\u25B6'}
+              </button>
+              <span className="clock-source-badge">
+                {node.clockSource === 'midi_in' ? 'MIDI' : 'INT'}
+              </span>
+            </div>
+            {(Date.now() - (clockBeatFlash[node.id] || 0)) < 200 && (
+              <div className="clock-beat-flash" />
             )}
           </div>
         )}
@@ -3604,6 +3860,155 @@ export default function GridView() {
                             No MIDI devices detected. Connect a MIDI controller and refresh.
                           </div>
                         )}
+                      </div>
+                    </div>
+                  ) : selNode.type === 'clock' ? (
+                    <div className="details-body">
+                      <div className="clock-details">
+                        {/* BPM control */}
+                        <div className="clock-option">
+                          <span className="clock-label">Tempo</span>
+                          <div className="clock-bpm-input-group">
+                            <input
+                              type="number"
+                              className="clock-bpm-input"
+                              min={20}
+                              max={300}
+                              step={1}
+                              value={selNode.clockBpm ?? 120}
+                              disabled={selNode.clockSource === 'midi_in'}
+                              onChange={(e) => {
+                                const v = Math.max(20, Math.min(300, parseInt(e.target.value) || 120));
+                                setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: { ...prev[selNode.id], clockBpm: v },
+                                }));
+                              }}
+                            />
+                            <span className="clock-bpm-suffix">BPM</span>
+                          </div>
+                        </div>
+
+                        {/* Clock source */}
+                        <div className="clock-option">
+                          <span className="clock-label">Source</span>
+                          <div className="clock-source-toggle-group">
+                            <button
+                              className={`clock-source-choice${(selNode.clockSource || 'internal') === 'internal' ? ' active' : ''}`}
+                              onClick={() => setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], clockSource: 'internal' },
+                              }))}
+                            >
+                              Internal
+                            </button>
+                            <button
+                              className={`clock-source-choice${(selNode.clockSource || 'internal') === 'midi_in' ? ' active' : ''}`}
+                              onClick={() => setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: { ...prev[selNode.id], clockSource: 'midi_in' },
+                              }))}
+                            >
+                              MIDI In
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* MIDI Clock In device (only when source=midi_in) */}
+                        {selNode.clockSource === 'midi_in' && (
+                          <div className="clock-option">
+                            <span className="clock-label">In Device</span>
+                            <select
+                              className="clock-device-select"
+                              value={selNode.clockMidiInDeviceId || ''}
+                              onChange={(e) => {
+                                const v = e.target.value || null;
+                                setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: { ...prev[selNode.id], clockMidiInDeviceId: v },
+                                }));
+                              }}
+                            >
+                              <option value="">Any device</option>
+                              {midiDevices.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* MIDI Clock Out toggle */}
+                        <div className="clock-option">
+                          <span className="clock-label">MIDI Out</span>
+                          <label className="clock-out-toggle">
+                            <input
+                              type="checkbox"
+                              checked={selNode.clockMidiOutEnabled || false}
+                              onChange={(e) => {
+                                setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: { ...prev[selNode.id], clockMidiOutEnabled: e.target.checked },
+                                }));
+                              }}
+                            />
+                            <span className="clock-out-toggle-label">Send clock</span>
+                          </label>
+                        </div>
+
+                        {/* MIDI Clock Out device */}
+                        {selNode.clockMidiOutEnabled && (
+                          <div className="clock-option">
+                            <span className="clock-label">Out Device</span>
+                            <select
+                              className="clock-device-select"
+                              value={selNode.clockMidiOutDeviceId || ''}
+                              onChange={(e) => {
+                                const v = e.target.value || null;
+                                setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: { ...prev[selNode.id], clockMidiOutDeviceId: v },
+                                }));
+                              }}
+                            >
+                              <option value="">First available</option>
+                              {midiOutputDevices.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Transport control */}
+                        <div className="clock-transport-control">
+                          <button
+                            className={`clock-transport-btn${selNode.clockRunning ? ' running' : ''}`}
+                            onClick={() => {
+                              setNodes((prev) => ({
+                                ...prev,
+                                [selNode.id]: {
+                                  ...prev[selNode.id],
+                                  clockRunning: !selNode.clockRunning,
+                                  clockBeatCount: selNode.clockRunning ? 0 : prev[selNode.id].clockBeatCount,
+                                },
+                              }));
+                            }}
+                          >
+                            {selNode.clockRunning ? '\u25A0 Stop' : '\u25B6 Start'}
+                          </button>
+                          <span className="clock-beat-counter">
+                            Beat {selNode.clockBeatCount || 0}
+                          </span>
+                        </div>
+
+                        <div className="clock-hint">
+                          {selNode.clockSource === 'internal'
+                            ? 'Internal clock fires a beat trigger at the set BPM. Connect the output to drive sequencers or timed events.'
+                            : 'Listens for external MIDI clock (24 ppqn). BPM is derived automatically from incoming clock ticks.'}
+                        </div>
                       </div>
                     </div>
                   ) : (
