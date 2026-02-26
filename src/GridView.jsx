@@ -935,27 +935,26 @@ uniform vec3 u_accent;
 uniform float u_numSamples;
 uniform float u_hasSignal;
 uniform float u_mode; // 0.0 = modern, 1.0 = classic
+uniform float u_trigOffset; // sub-sample trigger fractional offset
 
 in vec2 v_uv;
 out vec4 fragColor;
 
 float waveDist() {
   float texel = 1.0 / u_numSamples;
-  float x = v_uv.x;
+  float x = v_uv.x + u_trigOffset * texel; // sub-sample trigger alignment
   float y = v_uv.y;
 
   float s  = texture(u_waveform, vec2(x, 0.5)).r;
   float sR = texture(u_waveform, vec2(x + texel, 0.5)).r;
   float sL = texture(u_waveform, vec2(x - texel, 0.5)).r;
 
-  // Perpendicular distance to local tangent line — handles slopes
-  // without thinning the trace at steep transitions
-  float dsdx = (sR - sL) / (2.0 * texel);
-  float slope_px = dsdx * u_resolution.y / u_resolution.x;
-  float d = abs(y - s) * u_resolution.y / sqrt(1.0 + slope_px * slope_px);
+  // Vertical distance in pixels (correct metric for a time-domain scope
+  // where the horizontal axis is uniform time)
+  float d = abs(y - s) * u_resolution.y;
 
-  // Bounding-box fill between adjacent samples — catches vertical
-  // segments at sharp edges and step discontinuities
+  // Fill between adjacent samples — draws the vertical connecting
+  // segment at steep slopes / discontinuities
   float mn = min(s, sR);
   float mx = max(s, sR);
   if (y >= mn && y <= mx) d = 0.0;
@@ -1112,6 +1111,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       numSamples: gl.getUniformLocation(program, 'u_numSamples'),
       hasSignal:  gl.getUniformLocation(program, 'u_hasSignal'),
       mode:       gl.getUniformLocation(program, 'u_mode'),
+      trigOffset: gl.getUniformLocation(program, 'u_trigOffset'),
     };
 
     // Fullscreen quad
@@ -1150,19 +1150,26 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
     const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
 
-    const state = { ping: 0, lastMode: null };
+    const state = { ping: 0, lastMode: null, smoothYMin: null, smoothYMax: null };
     glStateRef.current = state;
 
     // Text overlay context
     const tctx = textCanvasRef.current?.getContext('2d');
 
-    // ── Helpers (same trigger + auto-scale logic) ──
+    // ── Helpers ──
+
+    // Find rising zero-crossing with sub-sample interpolation.
+    // Returns { index, frac } where frac ∈ [0, 1) is the fractional
+    // offset past index where the true crossing occurs.
     const findTrigger = (buf) => {
       const end = buf.length - SCOPE_DISPLAY_SAMPLES;
       for (let i = 0; i < end - 1; i++) {
-        if (buf[i] <= 0 && buf[i + 1] > 0) return i;
+        if (buf[i] <= 0 && buf[i + 1] > 0) {
+          const frac = -buf[i] / (buf[i + 1] - buf[i]);
+          return { index: i, frac };
+        }
       }
-      return 0;
+      return { index: 0, frac: 0 };
     };
 
     const computeYBounds = (buf, start, count) => {
@@ -1173,7 +1180,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         if (v > max) max = v;
       }
       if (max - min < 0.001) { min -= 0.5; max += 0.5; }
-      const pad = (max - min) * 0.12 || 0.1;
+      const pad = (max - min) * 0.15 || 0.1;
       return { yMin: min - pad, yMax: max + pad };
     };
 
@@ -1206,19 +1213,33 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       const hasSignal = buf && buf.length >= SCOPE_DISPLAY_SAMPLES;
 
       let yMin = 0, yMax = 1;
+      let trigFrac = 0;
 
       if (hasSignal) {
-        const trigIdx = findTrigger(buf);
+        const trig = findTrigger(buf);
+        const trigIdx = trig.index;
+        trigFrac = trig.frac;
         const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
         const bounds = computeYBounds(buf, trigIdx, displayLen);
-        yMin = bounds.yMin;
-        yMax = bounds.yMax;
+
+        // Smooth Y-axis bounds to prevent vertical bouncing.
+        // EMA with α=0.18 — fast enough to track real changes,
+        // slow enough to damp frame-to-frame jitter.
+        if (state.smoothYMin === null) {
+          state.smoothYMin = bounds.yMin;
+          state.smoothYMax = bounds.yMax;
+        } else {
+          state.smoothYMin += (bounds.yMin - state.smoothYMin) * 0.18;
+          state.smoothYMax += (bounds.yMax - state.smoothYMax) * 0.18;
+        }
+        yMin = state.smoothYMin;
+        yMax = state.smoothYMax;
         const range = yMax - yMin;
 
         // Normalize samples to [0, 1] for the shader
         const norm = normBuf.current;
         for (let i = 0; i < displayLen; i++) {
-          norm[i] = (buf[trigIdx + i] - yMin) / range;
+          norm[i] = Math.max(0, Math.min(1, (buf[trigIdx + i] - yMin) / range));
         }
 
         // Upload to waveform texture
@@ -1238,6 +1259,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       gl.uniform1f(u.numSamples, SCOPE_DISPLAY_SAMPLES);
       gl.uniform1f(u.hasSignal, hasSignal ? 1.0 : 0.0);
       gl.uniform1f(u.mode, isClassicNow ? 1.0 : 0.0);
+      gl.uniform1f(u.trigOffset, trigFrac);
 
       if (isClassicNow) {
         // Classic: render to FBO with persistence feedback
