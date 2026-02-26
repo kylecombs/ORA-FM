@@ -1963,7 +1963,6 @@ export default function GridView() {
       scriptRunnerRef.current?.stop(id);
       envelopeRunnerRef.current?.stop(id);
       scopeBuffersRef.current.delete(id);
-      scopeWriteIdxRef.current.delete(id);
       // Stop MIDI listener if this was a midi_in node
       const midiListener = midiListenersRef.current.get(id);
       if (midiListener) {
