@@ -662,11 +662,11 @@ const NODE_SCHEMA = {
     label: 'Scope',
     desc: 'oscilloscope',
     accent: '#6ab0b0',
-    synthDef: 'print',   // Reuses print synthdef (reads audio → control bus)
-    category: 'fx',      // Uses FX routing (reads from in_bus)
+    synthDef: 'ora_scope', // Buffer-based scope (BufWr+Phasor at audio rate)
+    category: 'fx',        // Uses FX routing (reads from in_bus)
     width: 262,
     inputs: ['in'],
-    outputs: [],          // Sink node (like print)
+    outputs: [],            // Sink node (monitor only)
     params: {},
   },
   // ── Script modules ───────────────────────────────────────
@@ -910,11 +910,15 @@ function panForPort(portIndex) {
 // Two modes:
 //   'classic' — CRT phosphor-glow with persistence trail, graticule, additive blending
 //   'modern'  — Clean utility trace matching the app's dark aesthetic
+//
+// Data: receives full 1024-sample buffer snapshots from scsynth via /b_getn.
+// Uses rising zero-crossing trigger for a stable, non-scrolling display.
 const SCOPE_W = 260;
 const SCOPE_H = 140;
 const SCOPE_H_MODERN = 100;
+const SCOPE_DISPLAY_SAMPLES = 512; // samples to display (half the buffer)
 
-function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor, mode }) {
+function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
   const trailRef = useRef(null);
@@ -932,7 +936,7 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
     // Off-screen canvas for classic persistence trail
     const trail = document.createElement('canvas');
     trail.width = SCOPE_W;
-    trail.height = SCOPE_H; // use max height so it works if toggled
+    trail.height = SCOPE_H;
     const tctx = trail.getContext('2d');
     tctx.fillStyle = '#08080a';
     tctx.fillRect(0, 0, SCOPE_W, SCOPE_H);
@@ -944,12 +948,21 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
     const b = parseInt(accentColor.slice(5, 7), 16);
     const accentRgba = (a) => `rgba(${r},${g},${b},${a})`;
 
-    // Helper: compute auto-scaled Y bounds from the buffer
-    const computeYBounds = (buf, writeIdx, len) => {
+    // Find a rising zero-crossing in the buffer for stable triggering.
+    // Searches the first half so we always have SCOPE_DISPLAY_SAMPLES after trigger.
+    const findTrigger = (buf) => {
+      const searchEnd = buf.length - SCOPE_DISPLAY_SAMPLES;
+      for (let i = 0; i < searchEnd - 1; i++) {
+        if (buf[i] <= 0 && buf[i + 1] > 0) return i;
+      }
+      return 0; // fallback: no zero-crossing found
+    };
+
+    // Compute auto-scaled Y bounds from a contiguous slice
+    const computeYBounds = (buf, start, count) => {
       let min = Infinity, max = -Infinity;
-      for (let i = 0; i < len; i++) {
-        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
-        const v = buf[idx];
+      for (let i = start; i < start + count; i++) {
+        const v = buf[i];
         if (v < min) min = v;
         if (v > max) max = v;
       }
@@ -958,18 +971,17 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       return { yMin: min - pad, yMax: max + pad };
     };
 
-    // Helper: build vertex path (returns array of {x,y})
-    const buildPath = (buf, writeIdx, len, w, h, yMin, yScale) => {
+    // Build vertex path from contiguous slice
+    const buildPath = (buf, start, count, w, h, yMin, yScale) => {
       const pts = [];
-      for (let i = 0; i < len; i++) {
-        const idx = (writeIdx - len + i + bufferSize) % bufferSize;
-        const v = buf[idx];
-        pts.push({ x: (i / (bufferSize - 1)) * w, y: h - (v - yMin) * yScale });
+      for (let i = 0; i < count; i++) {
+        const v = buf[start + i];
+        pts.push({ x: (i / (count - 1)) * w, y: h - (v - yMin) * yScale });
       }
       return pts;
     };
 
-    // Helper: stroke a path onto a context
+    // Stroke a path onto a context
     const strokePath = (c, pts) => {
       c.beginPath();
       for (let i = 0; i < pts.length; i++) {
@@ -984,18 +996,18 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       const w = SCOPE_W;
       const ch = SCOPE_H;
       const buf = buffersRef.current.get(nodeId);
-      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
 
       // Phosphor persistence: fade previous frame
       tctx.globalCompositeOperation = 'source-over';
       tctx.fillStyle = 'rgba(8, 8, 10, 0.12)';
       tctx.fillRect(0, 0, w, ch);
 
-      if (buf && writeIdx > 1) {
-        const len = Math.min(writeIdx, bufferSize);
-        const { yMin, yMax } = computeYBounds(buf, writeIdx, len);
+      if (buf && buf.length >= SCOPE_DISPLAY_SAMPLES) {
+        const trigIdx = findTrigger(buf);
+        const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
+        const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
         const yScale = ch / (yMax - yMin);
-        const pts = buildPath(buf, writeIdx, len, w, ch, yMin, yScale);
+        const pts = buildPath(buf, trigIdx, displayLen, w, ch, yMin, yScale);
 
         tctx.globalCompositeOperation = 'lighter';
         tctx.lineJoin = 'round';
@@ -1043,16 +1055,17 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       // Persistence trail
       ctx.drawImage(trail, 0, 0);
 
-      // Value readout
-      if (buf) {
-        const idx = writeIdxRef.current.get(nodeId) || 0;
-        if (idx > 0) {
-          const latest = buf[(idx - 1 + bufferSize) % bufferSize];
-          ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
-          ctx.font = '10px "DM Mono", monospace';
-          ctx.textAlign = 'right';
-          ctx.fillText(latest.toFixed(3), w - 5, 13);
+      // Value readout (peak amplitude)
+      if (buf && buf.length > 0) {
+        let peak = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const abs = Math.abs(buf[i]);
+          if (abs > peak) peak = abs;
         }
+        ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
+        ctx.font = '10px "DM Mono", monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(peak.toFixed(3), w - 5, 13);
       }
     };
 
@@ -1061,7 +1074,6 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       const w = SCOPE_W;
       const mh = SCOPE_H_MODERN;
       const buf = buffersRef.current.get(nodeId);
-      const writeIdx = writeIdxRef.current.get(nodeId) || 0;
 
       ctx.fillStyle = '#111010';
       ctx.fillRect(0, 0, w, mh);
@@ -1083,7 +1095,7 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       ctx.lineTo(w, Math.round(mh * 3 / 4) + 0.5);
       ctx.stroke();
 
-      if (!buf || writeIdx < 2) {
+      if (!buf || buf.length < SCOPE_DISPLAY_SAMPLES) {
         // "No signal" text
         ctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
         ctx.font = '9px "DM Mono", monospace';
@@ -1092,10 +1104,11 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
         return;
       }
 
-      const len = Math.min(writeIdx, bufferSize);
-      const { yMin, yMax } = computeYBounds(buf, writeIdx, len);
+      const trigIdx = findTrigger(buf);
+      const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
+      const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
       const yScale = mh / (yMax - yMin);
-      const pts = buildPath(buf, writeIdx, len, w, mh, yMin, yScale);
+      const pts = buildPath(buf, trigIdx, displayLen, w, mh, yMin, yScale);
 
       // Filled area under curve (subtle)
       ctx.fillStyle = accentRgba(0.06);
@@ -1113,19 +1126,22 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
       ctx.lineCap = 'round';
       strokePath(ctx, pts);
 
-      // Value readout
-      const latest = buf[(writeIdx - 1 + bufferSize) % bufferSize];
+      // Value readout (peak amplitude)
+      let peak = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const abs = Math.abs(buf[i]);
+        if (abs > peak) peak = abs;
+      }
       ctx.fillStyle = 'rgba(212, 207, 200, 0.4)';
       ctx.font = '9px "DM Mono", monospace';
       ctx.textAlign = 'right';
-      ctx.fillText(latest.toFixed(3), w - 4, 10);
+      ctx.fillText(peak.toFixed(3), w - 4, 10);
 
       // Min/max range
       ctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
       ctx.textAlign = 'left';
-      const { yMin: dispMin, yMax: dispMax } = computeYBounds(buf, writeIdx, len);
-      ctx.fillText((dispMin + (dispMax - dispMin) * 0.12).toFixed(1), 4, mh - 4);
-      ctx.fillText((dispMax - (dispMax - dispMin) * 0.12).toFixed(1), 4, 10);
+      ctx.fillText(yMin.toFixed(1), 4, mh - 4);
+      ctx.fillText(yMax.toFixed(1), 4, 10);
     };
 
     const draw = () => {
@@ -1138,7 +1154,7 @@ function ScopeCanvas({ buffersRef, writeIdxRef, nodeId, bufferSize, accentColor,
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [buffersRef, writeIdxRef, nodeId, bufferSize, accentColor]);
+  }, [buffersRef, nodeId, bufferSize, accentColor]);
 
   return (
     <div className={`scope-body ${isClassic ? 'scope-classic' : 'scope-modern'}`}>
@@ -1207,9 +1223,9 @@ export default function GridView() {
   const [midiActivity, setMidiActivity] = useState({}); // nodeId → last activity timestamp
 
   // Scope (oscilloscope) state — ring buffer per scope node
-  const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array ring buffer
-  const scopeWriteIdxRef = useRef(new Map()); // nodeId → write index
-  const SCOPE_BUFFER_SIZE = 128;
+    // Scope (oscilloscope) state — full waveform snapshot per scope node
+  const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array (latest buffer snapshot)
+  const SCOPE_BUFFER_SIZE = 1024; // matches GridEngine.SCOPE_BUF_FRAMES
 
   // Auto-scroll print console when new logs arrive
   useEffect(() => {
@@ -1245,18 +1261,9 @@ export default function GridView() {
       });
     };
 
-    // Handle scope module samples
-    engineRef.current.onScope = (nodeId, value) => {
-      const buffers = scopeBuffersRef.current;
-      const indices = scopeWriteIdxRef.current;
-      if (!buffers.has(nodeId)) {
-        buffers.set(nodeId, new Float32Array(SCOPE_BUFFER_SIZE));
-        indices.set(nodeId, 0);
-      }
-      const buf = buffers.get(nodeId);
-      const idx = indices.get(nodeId);
-      buf[idx % SCOPE_BUFFER_SIZE] = value;
-      indices.set(nodeId, idx + 1);
+    // Handle scope module waveform snapshots (full buffer from /b_getn)
+    engineRef.current.onScope = (nodeId, samples) => {
+      scopeBuffersRef.current.set(nodeId, samples);
     };
 
     scriptRunnerRef.current = new ScriptRunner({
@@ -1736,10 +1743,10 @@ export default function GridView() {
             out_c_bus: printBus,
           });
         } else if (node.type === 'scope') {
-          const scopeBus = engine.startScope(id);
+          const scopeBuf = engine.startScope(id);
           engine.playFx(id, schema.synthDef, {
             in_bus: routing.inBus,
-            out_c_bus: scopeBus,
+            bufnum: scopeBuf,
           });
         } else {
           engine.playFx(id, schema.synthDef, {
@@ -2337,7 +2344,6 @@ export default function GridView() {
         setSelectedNodeId(null);
         setMidiActivity({});
         scopeBuffersRef.current.clear();
-        scopeWriteIdxRef.current.clear();
 
         // Restore nodes
         const restoredNodes = {};
@@ -2952,7 +2958,6 @@ export default function GridView() {
           <>
             <ScopeCanvas
               buffersRef={scopeBuffersRef}
-              writeIdxRef={scopeWriteIdxRef}
               nodeId={node.id}
               bufferSize={SCOPE_BUFFER_SIZE}
               accentColor={schema.accent}
