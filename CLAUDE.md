@@ -105,6 +105,35 @@ Per synthdef:
 4. Output the `.scsyndef` file to `public/supersonic/synthdefs/`
 5. Verify with `od -A x -t x1z` that the header starts with `53 43 67 66` (SCgf)
 
+## Frequency Parameter Module Requirements
+
+**Every module that has a `freq` parameter must include the following UI features:**
+
+1. **LFO / Audio rate toggle** — stored as `node.freqMode` (`'audio'` or `'lfo'`). Default is `'audio'`.
+   - **Audio mode:** 20 Hz – 20,000 Hz (for pitched tones)
+   - **LFO mode:** 0.01 Hz – 20 Hz (for modulation / slow movement)
+   - Switching modes clamps or resets the current frequency to the new range.
+
+2. **Custom range override** — Users can set `node.freqRangeMin` and `node.freqRangeMax` in the details panel to narrow or widen the slider range within the selected mode.
+
+3. **Editable value field** — The parameter value display on the canvas is clickable. Users can click to type an exact numeric value (Enter to confirm, Escape to cancel, blur to confirm).
+
+4. **Details panel** — Any module with a `freq` param gets a details panel (shown when clicking the module) with:
+   - Rate toggle (Audio / LFO)
+   - Min/Max range inputs with Reset button
+   - Quantize-to-note checkbox
+   - Current value display (with period shown in LFO mode)
+
+**When creating a new module with a frequency parameter:**
+- Add `freq` to the `params` object in `NODE_SCHEMA` with `min: 0.1, max: 20000`
+- The `hasFreqParam()` helper auto-detects modules with `freq` in their params
+- Initialize `node.freqMode = 'audio'` in `addNode()` (already handled by the generic check)
+- The details panel and dynamic slider range are applied automatically
+- Use the range constants from `FREQ_RANGES` (`audio` / `lfo`)
+- See `getFreqRange(node)` for resolving the effective min/max/step
+
+**Reference implementation:** `src/GridView.jsx` — search for `FREQ_RANGES`, `handleFreqModeChange`, `hasFreqParam`
+
 ## SuperSonic-Specific Notes
 
 - SuperSonic is **not** SuperCollider — there is no sclang, no default group, no node ID allocator. You are sending raw OSC messages.
