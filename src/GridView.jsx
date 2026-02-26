@@ -969,18 +969,6 @@ void main() {
   fragColor = vec4(color, 1.0);
 }`;
 
-// ── Blit/composite fragment shader ──
-const BLIT_FRAG = `#version 300 es
-precision highp float;
-uniform sampler2D u_tex;
-uniform float u_alpha;
-in vec2 v_uv;
-out vec4 fragColor;
-void main() {
-  vec4 c = texture(u_tex, v_uv);
-  fragColor = vec4(c.rgb * u_alpha, c.a * u_alpha);
-}`;
-
 // ── Woscope-style line vertex shader ──
 // Expands 4 colocated vertices per sample into a quad around each
 // line segment. Works in pixel space for correct aspect ratio.
@@ -1076,23 +1064,6 @@ function scopeCreateProgram(gl, vSrc, fSrc) {
   return p;
 }
 
-function scopeCreateFBO(gl, w, h) {
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-  const fbo = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-  return { fbo, tex };
-}
-
 function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
   const canvasRef = useRef(null);
   const textCanvasRef = useRef(null);
@@ -1120,8 +1091,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     // ── Compile shader programs ──
     const gratProg = scopeCreateProgram(gl, QUAD_VERT, GRAT_FRAG);
     const lineProg = scopeCreateProgram(gl, LINE_VERT, LINE_FRAG);
-    const blitProg = scopeCreateProgram(gl, QUAD_VERT, BLIT_FRAG);
-    if (!gratProg || !lineProg || !blitProg) return;
+    if (!gratProg || !lineProg) return;
 
     // ── Uniform locations ──
     const gratU = {
@@ -1137,11 +1107,6 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       intensity:  gl.getUniformLocation(lineProg, 'uIntensity'),
       color:      gl.getUniformLocation(lineProg, 'uColor'),
     };
-    const blitU = {
-      tex:   gl.getUniformLocation(blitProg, 'u_tex'),
-      alpha: gl.getUniformLocation(blitProg, 'u_alpha'),
-    };
-
     // ── Shared fullscreen quad VBO ──
     const quadVbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
@@ -1154,15 +1119,6 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const gratPosLoc = gl.getAttribLocation(gratProg, 'a_pos');
     gl.enableVertexAttribArray(gratPosLoc);
     gl.vertexAttribPointer(gratPosLoc, 2, gl.FLOAT, false, 0, 0);
-    gl.bindVertexArray(null);
-
-    // Blit VAO
-    const blitVao = gl.createVertexArray();
-    gl.bindVertexArray(blitVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
-    const blitPosLoc = gl.getAttribLocation(blitProg, 'a_pos');
-    gl.enableVertexAttribArray(blitPosLoc);
-    gl.vertexAttribPointer(blitPosLoc, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
     // ── Line segment geometry buffers ──
@@ -1223,21 +1179,12 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, SCOPE_DISPLAY_SAMPLES, 1, 0,
                   gl.RED, gl.FLOAT, new Float32Array(SCOPE_DISPLAY_SAMPLES));
 
-    // Ping-pong FBOs for classic persistence
-    const fbos = [scopeCreateFBO(gl, SCOPE_W, SCOPE_H), scopeCreateFBO(gl, SCOPE_W, SCOPE_H)];
-    for (const f of fbos) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
     // Accent color (0–1 float)
     const ar = parseInt(accentColor.slice(1, 3), 16) / 255;
     const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
     const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
 
-    const state = { ping: 0, lastMode: null, smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
+    const state = { lastMode: null, smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
     glStateRef.current = state;
 
     const tctx = textCanvasRef.current?.getContext('2d');
@@ -1288,16 +1235,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       const isClassicNow = curMode === 'classic';
       const ch = isClassicNow ? SCOPE_H : SCOPE_H_MODERN;
 
-      // Handle mode change: clear persistence FBOs
       if (curMode !== state.lastMode) {
-        if (isClassicNow) {
-          for (const f of fbos) {
-            gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
-            gl.clearColor(0, 0, 0, 0);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-          }
-          state.ping = 0;
-        }
         state.lastMode = curMode;
       }
 
@@ -1368,25 +1306,24 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
 
       // ── Render ──
       if (isClassicNow) {
-        // ── Classic mode: persistence via ping-pong FBOs ──
-        const readIdx = state.ping;
-        const writeIdx = 1 - state.ping;
-
-        // Step 1: Decay — blit previous FBO with alpha attenuation
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIdx].fbo);
+        // ── Classic mode: direct rendering with multi-pass CRT glow ──
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, SCOPE_W, SCOPE_H);
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
         gl.disable(gl.BLEND);
-        gl.useProgram(blitProg);
+
+        // Graticule + background
+        gl.useProgram(gratProg);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, fbos[readIdx].tex);
-        gl.uniform1i(blitU.tex, 0);
-        gl.uniform1f(blitU.alpha, 0.88);
-        gl.bindVertexArray(blitVao);
+        gl.bindTexture(gl.TEXTURE_2D, waveTex);
+        gl.uniform1i(gratU.waveform, 0);
+        gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
+        gl.uniform1f(gratU.mode, 1.0);
+        gl.uniform3f(gratU.accent, ar, ag, ab);
+        gl.uniform1f(gratU.hasSignal, 0.0);
+        gl.bindVertexArray(gratVao);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // Step 2: Draw waveform lines with additive blending
+        // Waveform lines with multi-pass glow (core + mid + outer)
         if (hasSignal && numSegments > 0) {
           gl.enable(gl.BLEND);
           gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
@@ -1395,7 +1332,6 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
           gl.uniform3f(lineU.color, ar, ag, ab);
           gl.bindVertexArray(lineVao);
 
-          // Multi-pass glow: core → mid → outer
           gl.uniform1f(lineU.size, 1.5);
           gl.uniform1f(lineU.intensity, 1.4);
           gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
@@ -1410,35 +1346,6 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
 
           gl.disable(gl.BLEND);
         }
-
-        state.ping = writeIdx;
-
-        // Step 3: Draw graticule to screen
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, SCOPE_W, SCOPE_H);
-        gl.disable(gl.BLEND);
-        gl.useProgram(gratProg);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.uniform1i(gratU.waveform, 0);
-        gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
-        gl.uniform1f(gratU.mode, 1.0);
-        gl.uniform3f(gratU.accent, ar, ag, ab);
-        gl.uniform1f(gratU.hasSignal, 0.0);
-        gl.bindVertexArray(gratVao);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Step 4: Overlay persistence FBO (additive)
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ONE, gl.ONE);
-        gl.useProgram(blitProg);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, fbos[writeIdx].tex);
-        gl.uniform1i(blitU.tex, 0);
-        gl.uniform1f(blitU.alpha, 1.0);
-        gl.bindVertexArray(blitVao);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        gl.disable(gl.BLEND);
 
       } else {
         // ── Modern mode: direct rendering ──
@@ -1517,19 +1424,13 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       if (animRef.current) cancelAnimationFrame(animRef.current);
       gl.deleteProgram(gratProg);
       gl.deleteProgram(lineProg);
-      gl.deleteProgram(blitProg);
       gl.deleteTexture(waveTex);
       gl.deleteBuffer(quadVbo);
       gl.deleteBuffer(lineVbo);
       gl.deleteBuffer(idxVbo);
       gl.deleteBuffer(ebo);
       gl.deleteVertexArray(gratVao);
-      gl.deleteVertexArray(blitVao);
       gl.deleteVertexArray(lineVao);
-      for (const f of fbos) {
-        gl.deleteFramebuffer(f.fbo);
-        gl.deleteTexture(f.tex);
-      }
       glStateRef.current = null;
     };
   }, [buffersRef, nodeId, bufferSize, accentColor]);
