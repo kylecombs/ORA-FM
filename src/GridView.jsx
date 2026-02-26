@@ -906,18 +906,21 @@ function panForPort(portIndex) {
   return portIndex === 0 ? -0.8 : 0.8;
 }
 
-// ── WebGL Oscilloscope ─────────────────────────────────────────
-// GPU-accelerated scope rendering using signed-distance-field approach.
-// The fragment shader computes per-pixel distance to the waveform curve
-// for anti-aliased trace with natural glow — eliminates CPU path-building.
-// Classic mode: ping-pong FBOs for phosphor persistence trail.
+// ── WebGL Oscilloscope (Geometry-based line renderer) ────────────
+// GPU-accelerated scope using per-segment quad geometry adapted from
+// woscope (https://github.com/m1el/woscope). Each waveform segment is
+// expanded into a quad by the vertex shader; the fragment shader computes
+// analytical Gaussian beam intensity via the error function (erf) for
+// physically accurate CRT beam simulation with natural anti-aliasing.
+// Classic mode: ping-pong FBOs for phosphor persistence with decay.
 // Text readouts rendered via a lightweight Canvas 2D overlay.
 const SCOPE_W = 260;
 const SCOPE_H = 140;
 const SCOPE_H_MODERN = 100;
 const SCOPE_DISPLAY_SAMPLES = 512; // samples to display (half the buffer)
 
-const SCOPE_VERT_SRC = `#version 300 es
+// ── Shared fullscreen-quad vertex shader ──
+const QUAD_VERT = `#version 300 es
 in vec2 a_pos;
 out vec2 v_uv;
 void main() {
@@ -925,58 +928,21 @@ void main() {
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
 
-const SCOPE_FRAG_SRC = `#version 300 es
+// ── Graticule + background fragment shader ──
+const GRAT_FRAG = `#version 300 es
 precision highp float;
-
-uniform sampler2D u_waveform;
-uniform sampler2D u_prevFrame;
 uniform vec2 u_resolution;
+uniform float u_mode;
 uniform vec3 u_accent;
-uniform float u_numSamples;
 uniform float u_hasSignal;
-uniform float u_mode; // 0.0 = modern, 1.0 = classic
-uniform float u_trigOffset; // sub-sample trigger fractional offset
-
+uniform sampler2D u_waveform;
 in vec2 v_uv;
 out vec4 fragColor;
-
-float waveDist() {
-  float texel = 1.0 / u_numSamples;
-  float x = v_uv.x + u_trigOffset * texel; // sub-sample trigger alignment
-  float y = v_uv.y;
-
-  float s  = texture(u_waveform, vec2(x, 0.5)).r;
-  float sR = texture(u_waveform, vec2(x + texel, 0.5)).r;
-  float sL = texture(u_waveform, vec2(x - texel, 0.5)).r;
-
-  // Vertical distance in pixels (correct metric for a time-domain scope
-  // where the horizontal axis is uniform time)
-  float d = abs(y - s) * u_resolution.y;
-
-  // Fill between adjacent samples — draws the vertical connecting
-  // segment at steep slopes / discontinuities
-  float mn = min(s, sR);
-  float mx = max(s, sR);
-  if (y >= mn && y <= mx) d = 0.0;
-
-  mn = min(sL, s);
-  mx = max(sL, s);
-  if (y >= mn && y <= mx) d = 0.0;
-
-  return d;
-}
-
 void main() {
   bool classic = u_mode > 0.5;
-
-  vec3 bg = classic
-    ? vec3(0.031, 0.031, 0.039)
-    : vec3(0.067, 0.063, 0.063);
-
-  // Graticule
+  vec3 bg = classic ? vec3(0.031, 0.031, 0.039) : vec3(0.067, 0.063, 0.063);
   float grat = 0.0;
   vec3 gc = vec3(0.478, 0.459, 0.439);
-
   if (classic) {
     for (float i = 1.0; i < 5.0; i += 1.0) {
       float d = abs(v_uv.y - i / 5.0) * u_resolution.y;
@@ -987,44 +953,94 @@ void main() {
       grat = max(grat, smoothstep(0.7, 0.0, d) * 0.08);
     }
   }
-
   float cd = abs(v_uv.y - 0.5) * u_resolution.y;
   grat = max(grat, smoothstep(0.7, 0.0, cd) * (classic ? 0.18 : 0.12));
-
   if (!classic) {
     float q1 = abs(v_uv.y - 0.25) * u_resolution.y;
     float q3 = abs(v_uv.y - 0.75) * u_resolution.y;
     grat = max(grat, smoothstep(0.7, 0.0, q1) * 0.05);
     grat = max(grat, smoothstep(0.7, 0.0, q3) * 0.05);
   }
-
   vec3 color = bg + gc * grat;
-  float wa = 0.0;
-
-  if (u_hasSignal > 0.5) {
-    float dist = waveDist();
-
-    if (classic) {
-      // Triple glow: core + mid + outer
-      wa = smoothstep(1.2, 0.0, dist) * 0.9
-         + smoothstep(3.5, 0.0, dist) * 0.3
-         + smoothstep(7.0, 0.0, dist) * 0.15;
-    } else {
-      wa = smoothstep(1.5, 0.0, dist) * 0.7;
-      // Subtle filled area under curve
-      float s = texture(u_waveform, vec2(v_uv.x, 0.5)).r;
-      if (v_uv.y < s) wa = max(wa, 0.06);
-    }
+  if (!classic && u_hasSignal > 0.5) {
+    float s = texture(u_waveform, vec2(v_uv.x, 0.5)).r;
+    if (v_uv.y < s) color += u_accent * 0.06;
   }
+  fragColor = vec4(color, 1.0);
+}`;
 
-  // Persistence (classic only)
-  if (classic) {
-    vec4 prev = texture(u_prevFrame, v_uv);
-    wa = max(wa, prev.a * 0.88);
+// ── Blit/composite fragment shader ──
+const BLIT_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform float u_alpha;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+  vec4 c = texture(u_tex, v_uv);
+  fragColor = vec4(c.rgb * u_alpha, c.a * u_alpha);
+}`;
+
+// ── Woscope-style line vertex shader ──
+// Expands 4 colocated vertices per sample into a quad around each
+// line segment. Works in pixel space for correct aspect ratio.
+const LINE_VERT = `#version 300 es
+precision highp float;
+uniform float uSize;
+uniform vec2 uResolution;
+in vec2 aStart;
+in vec2 aEnd;
+in float aIdx;
+out vec4 vLine;
+void main() {
+  vec2 sPx = (aStart * 0.5 + 0.5) * uResolution;
+  vec2 ePx = (aEnd * 0.5 + 0.5) * uResolution;
+  float idx = mod(aIdx, 4.0);
+  vec2 current;
+  float tang;
+  if (idx >= 2.0) { current = ePx; tang = 1.0; }
+  else { current = sPx; tang = -1.0; }
+  float side = (mod(idx, 2.0) - 0.5) * 2.0;
+  vec2 dir = ePx - sPx;
+  float len = length(dir);
+  vLine = vec4(tang, side, len, 0.0);
+  if (len > 0.001) dir /= len;
+  else dir = vec2(1.0, 0.0);
+  vec2 norm = vec2(-dir.y, dir.x);
+  vec2 posPx = current + (tang * dir + norm * side) * uSize;
+  gl_Position = vec4(posPx / uResolution * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// ── Woscope-style line fragment shader ──
+// Analytical Gaussian beam intensity via error function (erf).
+// Physically models a CRT electron beam's intensity profile.
+const LINE_FRAG = `#version 300 es
+precision highp float;
+#define SQRT2 1.4142135623730951
+uniform float uSize;
+uniform float uIntensity;
+uniform vec3 uColor;
+in vec4 vLine;
+out vec4 fragColor;
+float erf(float x) {
+  float s = sign(x), a = abs(x);
+  x = 1.0 + (0.278393 + (0.230389 + (0.000972 + 0.078108 * a) * a) * a) * a;
+  x *= x;
+  return s - s / (x * x);
+}
+void main() {
+  float len = vLine.z;
+  vec2 xy = vec2((len * 0.5 + uSize) * vLine.x + len * 0.5, uSize * vLine.y);
+  float sigma = uSize / 4.0;
+  float alpha;
+  if (len < 0.001) {
+    alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) * 0.5 / max(sqrt(uSize), 0.001);
+  } else {
+    alpha = erf((len - xy.x) / SQRT2 / sigma) + erf(xy.x / SQRT2 / sigma);
+    alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) * 0.5 / len * uSize;
   }
-
-  color += u_accent * wa;
-  fragColor = vec4(color, wa);
+  alpha *= uIntensity;
+  fragColor = vec4(uColor * alpha, alpha);
 }`;
 
 // ── WebGL helpers ──────────────────────────────────────────────
@@ -1096,36 +1112,104 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
       return;
     }
 
-    // Enable float texture linear filtering if available
     gl.getExtension('OES_texture_float_linear');
 
-    const program = scopeCreateProgram(gl, SCOPE_VERT_SRC, SCOPE_FRAG_SRC);
-    if (!program) return;
+    // ── Compile shader programs ──
+    const gratProg = scopeCreateProgram(gl, QUAD_VERT, GRAT_FRAG);
+    const lineProg = scopeCreateProgram(gl, LINE_VERT, LINE_FRAG);
+    const blitProg = scopeCreateProgram(gl, QUAD_VERT, BLIT_FRAG);
+    if (!gratProg || !lineProg || !blitProg) return;
 
-    // Uniform locations
-    const u = {
-      waveform:   gl.getUniformLocation(program, 'u_waveform'),
-      prevFrame:  gl.getUniformLocation(program, 'u_prevFrame'),
-      resolution: gl.getUniformLocation(program, 'u_resolution'),
-      accent:     gl.getUniformLocation(program, 'u_accent'),
-      numSamples: gl.getUniformLocation(program, 'u_numSamples'),
-      hasSignal:  gl.getUniformLocation(program, 'u_hasSignal'),
-      mode:       gl.getUniformLocation(program, 'u_mode'),
-      trigOffset: gl.getUniformLocation(program, 'u_trigOffset'),
+    // ── Uniform locations ──
+    const gratU = {
+      resolution: gl.getUniformLocation(gratProg, 'u_resolution'),
+      mode:       gl.getUniformLocation(gratProg, 'u_mode'),
+      accent:     gl.getUniformLocation(gratProg, 'u_accent'),
+      hasSignal:  gl.getUniformLocation(gratProg, 'u_hasSignal'),
+      waveform:   gl.getUniformLocation(gratProg, 'u_waveform'),
+    };
+    const lineU = {
+      size:       gl.getUniformLocation(lineProg, 'uSize'),
+      resolution: gl.getUniformLocation(lineProg, 'uResolution'),
+      intensity:  gl.getUniformLocation(lineProg, 'uIntensity'),
+      color:      gl.getUniformLocation(lineProg, 'uColor'),
+    };
+    const blitU = {
+      tex:   gl.getUniformLocation(blitProg, 'u_tex'),
+      alpha: gl.getUniformLocation(blitProg, 'u_alpha'),
     };
 
-    // Fullscreen quad
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    // ── Shared fullscreen quad VBO ──
+    const quadVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-    const posLoc = gl.getAttribLocation(program, 'a_pos');
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Graticule VAO
+    const gratVao = gl.createVertexArray();
+    gl.bindVertexArray(gratVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    const gratPosLoc = gl.getAttribLocation(gratProg, 'a_pos');
+    gl.enableVertexAttribArray(gratPosLoc);
+    gl.vertexAttribPointer(gratPosLoc, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
-    // Waveform data texture (R32F, 1D)
+    // Blit VAO
+    const blitVao = gl.createVertexArray();
+    gl.bindVertexArray(blitVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    const blitPosLoc = gl.getAttribLocation(blitProg, 'a_pos');
+    gl.enableVertexAttribArray(blitPosLoc);
+    gl.vertexAttribPointer(blitPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    // ── Line segment geometry buffers ──
+    const maxSegments = SCOPE_DISPLAY_SAMPLES - 1;
+    const maxVerts = maxSegments * 4;
+
+    // Scratch buffer: 4 copies of (x,y) per sample, updated each frame
+    const scratchBuf = new Float32Array(SCOPE_DISPLAY_SAMPLES * 8);
+    const lineVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, scratchBuf.byteLength, gl.DYNAMIC_DRAW);
+
+    // Static vertex index attribute: [0, 1, 2, 3, 4, 5, ...]
+    const idxData = new Float32Array(maxVerts);
+    for (let i = 0; i < maxVerts; i++) idxData[i] = i;
+    const idxVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, idxVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, idxData, gl.STATIC_DRAW);
+
+    // Static element index buffer (2 triangles per segment quad)
+    const ebo = gl.createBuffer();
+    const indices = new Uint16Array(maxSegments * 6);
+    for (let i = 0; i < maxSegments; i++) {
+      const b = i * 4, o = i * 6;
+      indices[o] = b; indices[o+1] = b+1; indices[o+2] = b+2;
+      indices[o+3] = b+2; indices[o+4] = b+1; indices[o+5] = b+3;
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+    // Line VAO — woscope stride trick: aStart/aEnd read from same VBO
+    // at 1-sample offset. Each sample is stored 4× as (x,y) pairs.
+    // Stride = 8 bytes (one vec2). aEnd offset = 32 bytes (4 vec2 = next sample).
+    const lineVao = gl.createVertexArray();
+    gl.bindVertexArray(lineVao);
+    const aStartLoc = gl.getAttribLocation(lineProg, 'aStart');
+    const aEndLoc   = gl.getAttribLocation(lineProg, 'aEnd');
+    const aIdxLoc   = gl.getAttribLocation(lineProg, 'aIdx');
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+    gl.enableVertexAttribArray(aStartLoc);
+    gl.vertexAttribPointer(aStartLoc, 2, gl.FLOAT, false, 8, 0);
+    gl.enableVertexAttribArray(aEndLoc);
+    gl.vertexAttribPointer(aEndLoc, 2, gl.FLOAT, false, 8, 32);
+    gl.bindBuffer(gl.ARRAY_BUFFER, idxVbo);
+    gl.enableVertexAttribArray(aIdxLoc);
+    gl.vertexAttribPointer(aIdxLoc, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bindVertexArray(null);
+
+    // ── Waveform texture (for modern fill-under-curve) ──
     const waveTex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, waveTex);
@@ -1140,7 +1224,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const fbos = [scopeCreateFBO(gl, SCOPE_W, SCOPE_H), scopeCreateFBO(gl, SCOPE_W, SCOPE_H)];
     for (const f of fbos) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
-      gl.clearColor(0.031, 0.031, 0.039, 0.0);
+      gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1153,14 +1237,9 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
     const state = { ping: 0, lastMode: null, smoothYMin: null, smoothYMax: null };
     glStateRef.current = state;
 
-    // Text overlay context
     const tctx = textCanvasRef.current?.getContext('2d');
 
     // ── Helpers ──
-
-    // Find rising zero-crossing with sub-sample interpolation.
-    // Returns { index, frac } where frac ∈ [0, 1) is the fractional
-    // offset past index where the true crossing occurs.
     const findTrigger = (buf) => {
       const end = buf.length - SCOPE_DISPLAY_SAMPLES;
       for (let i = 0; i < end - 1; i++) {
@@ -1195,7 +1274,7 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         if (isClassicNow) {
           for (const f of fbos) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
-            gl.clearColor(0.031, 0.031, 0.039, 0.0);
+            gl.clearColor(0, 0, 0, 0);
             gl.clear(gl.COLOR_BUFFER_BIT);
           }
           state.ping = 0;
@@ -1203,28 +1282,24 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         state.lastMode = curMode;
       }
 
-      // Ensure canvas backing store matches current mode
       if (canvas.height !== ch) canvas.height = ch;
       const tc = textCanvasRef.current;
       if (tc && tc.height !== ch) tc.height = ch;
 
-      // Get buffer data
       const buf = buffersRef.current.get(nodeId);
       const hasSignal = buf && buf.length >= SCOPE_DISPLAY_SAMPLES;
 
       let yMin = 0, yMax = 1;
-      let trigFrac = 0;
+      let numSegments = 0;
 
       if (hasSignal) {
         const trig = findTrigger(buf);
         const trigIdx = trig.index;
-        trigFrac = trig.frac;
+        const trigFrac = trig.frac;
         const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
         const bounds = computeYBounds(buf, trigIdx, displayLen);
 
-        // Smooth Y-axis bounds to prevent vertical bouncing.
-        // EMA with α=0.18 — fast enough to track real changes,
-        // slow enough to damp frame-to-frame jitter.
+        // Smooth Y-axis bounds (EMA α=0.18)
         if (state.smoothYMin === null) {
           state.smoothYMin = bounds.yMin;
           state.smoothYMax = bounds.yMax;
@@ -1236,68 +1311,139 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         yMax = state.smoothYMax;
         const range = yMax - yMin;
 
-        // Normalize samples to [0, 1] for the shader
         const norm = normBuf.current;
         for (let i = 0; i < displayLen; i++) {
           norm[i] = Math.max(0, Math.min(1, (buf[trigIdx + i] - yMin) / range));
         }
 
-        // Upload to waveform texture
+        // Upload waveform texture (for modern fill-under-curve)
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, waveTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, displayLen, 1, 0,
                       gl.RED, gl.FLOAT, norm.subarray(0, displayLen));
+
+        // Build line geometry: 4 copies of (x,y) per sample in clip space
+        numSegments = displayLen - 1;
+        const dx = 2.0 / (displayLen - 1);
+        const xOff = -trigFrac * dx; // sub-sample trigger alignment
+        for (let i = 0; i < displayLen; i++) {
+          const x = i * dx - 1.0 + xOff;
+          const y = norm[i] * 2.0 - 1.0;
+          const b = i * 8;
+          scratchBuf[b] = x; scratchBuf[b+1] = y;
+          scratchBuf[b+2] = x; scratchBuf[b+3] = y;
+          scratchBuf[b+4] = x; scratchBuf[b+5] = y;
+          scratchBuf[b+6] = x; scratchBuf[b+7] = y;
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, scratchBuf.subarray(0, displayLen * 8));
       }
 
       // ── Render ──
-      gl.useProgram(program);
-      gl.bindVertexArray(vao);
-
-      gl.uniform1i(u.waveform, 0);
-      gl.uniform1i(u.prevFrame, 1);
-      gl.uniform3f(u.accent, ar, ag, ab);
-      gl.uniform1f(u.numSamples, SCOPE_DISPLAY_SAMPLES);
-      gl.uniform1f(u.hasSignal, hasSignal ? 1.0 : 0.0);
-      gl.uniform1f(u.mode, isClassicNow ? 1.0 : 0.0);
-      gl.uniform1f(u.trigOffset, trigFrac);
-
       if (isClassicNow) {
-        // Classic: render to FBO with persistence feedback
+        // ── Classic mode: persistence via ping-pong FBOs ──
         const readIdx = state.ping;
         const writeIdx = 1 - state.ping;
 
+        // Step 1: Decay — blit previous FBO with alpha attenuation
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIdx].fbo);
         gl.viewport(0, 0, SCOPE_W, SCOPE_H);
-        gl.uniform2f(u.resolution, SCOPE_W, SCOPE_H);
-
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.disable(gl.BLEND);
+        gl.useProgram(blitProg);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, fbos[readIdx].tex);
-
+        gl.uniform1i(blitU.tex, 0);
+        gl.uniform1f(blitU.alpha, 0.88);
+        gl.bindVertexArray(blitVao);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // Blit FBO to screen
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbos[writeIdx].fbo);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-        gl.blitFramebuffer(0, 0, SCOPE_W, SCOPE_H,
-                           0, 0, SCOPE_W, SCOPE_H,
-                           gl.COLOR_BUFFER_BIT, gl.NEAREST);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // Step 2: Draw waveform lines with additive blending
+        if (hasSignal && numSegments > 0) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+          gl.useProgram(lineProg);
+          gl.uniform2f(lineU.resolution, SCOPE_W, SCOPE_H);
+          gl.uniform3f(lineU.color, ar, ag, ab);
+          gl.bindVertexArray(lineVao);
+
+          // Multi-pass glow: core → mid → outer
+          gl.uniform1f(lineU.size, 1.5);
+          gl.uniform1f(lineU.intensity, 1.0);
+          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+          gl.uniform1f(lineU.size, 4.0);
+          gl.uniform1f(lineU.intensity, 0.3);
+          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+          gl.uniform1f(lineU.size, 8.0);
+          gl.uniform1f(lineU.intensity, 0.12);
+          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+          gl.disable(gl.BLEND);
+        }
 
         state.ping = writeIdx;
-      } else {
-        // Modern: render directly to screen
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, SCOPE_W, ch);
-        gl.uniform2f(u.resolution, SCOPE_W, ch);
 
+        // Step 3: Draw graticule to screen
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, SCOPE_W, SCOPE_H);
+        gl.disable(gl.BLEND);
+        gl.useProgram(gratProg);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, waveTex);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, fbos[0].tex); // dummy, not sampled
-
+        gl.uniform1i(gratU.waveform, 0);
+        gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
+        gl.uniform1f(gratU.mode, 1.0);
+        gl.uniform3f(gratU.accent, ar, ag, ab);
+        gl.uniform1f(gratU.hasSignal, 0.0);
+        gl.bindVertexArray(gratVao);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Step 4: Overlay persistence FBO (additive)
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        gl.useProgram(blitProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fbos[writeIdx].tex);
+        gl.uniform1i(blitU.tex, 0);
+        gl.uniform1f(blitU.alpha, 1.0);
+        gl.bindVertexArray(blitVao);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.disable(gl.BLEND);
+
+      } else {
+        // ── Modern mode: direct rendering ──
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, SCOPE_W, ch);
+        gl.disable(gl.BLEND);
+
+        // Graticule + background + fill-under-curve
+        gl.useProgram(gratProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waveTex);
+        gl.uniform1i(gratU.waveform, 0);
+        gl.uniform2f(gratU.resolution, SCOPE_W, ch);
+        gl.uniform1f(gratU.mode, 0.0);
+        gl.uniform3f(gratU.accent, ar, ag, ab);
+        gl.uniform1f(gratU.hasSignal, hasSignal ? 1.0 : 0.0);
+        gl.bindVertexArray(gratVao);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Waveform lines (single pass, additive)
+        if (hasSignal && numSegments > 0) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+          gl.useProgram(lineProg);
+          gl.uniform2f(lineU.resolution, SCOPE_W, ch);
+          gl.uniform3f(lineU.color, ar, ag, ab);
+          gl.uniform1f(lineU.size, 1.5);
+          gl.uniform1f(lineU.intensity, 0.8);
+          gl.bindVertexArray(lineVao);
+          gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+          gl.disable(gl.BLEND);
+        }
       }
 
       // ── Text overlay ──
@@ -1342,10 +1488,17 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
 
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
-      gl.deleteProgram(program);
+      gl.deleteProgram(gratProg);
+      gl.deleteProgram(lineProg);
+      gl.deleteProgram(blitProg);
       gl.deleteTexture(waveTex);
-      gl.deleteBuffer(vbo);
-      gl.deleteVertexArray(vao);
+      gl.deleteBuffer(quadVbo);
+      gl.deleteBuffer(lineVbo);
+      gl.deleteBuffer(idxVbo);
+      gl.deleteBuffer(ebo);
+      gl.deleteVertexArray(gratVao);
+      gl.deleteVertexArray(blitVao);
+      gl.deleteVertexArray(lineVao);
       for (const f of fbos) {
         gl.deleteFramebuffer(f.fbo);
         gl.deleteTexture(f.tex);
