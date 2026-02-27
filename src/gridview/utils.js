@@ -58,6 +58,10 @@ export function getParamPortPos(node, schema, paramKey) {
   if (node.type === 'envelope' && paramKey === 'trig') {
     return { x: node.x, y: node.y + HEADER_H + 60 };
   }
+  // Sequencer trigger port: positioned above step sliders
+  if (node.type === 'sequencer' && paramKey === 'trig') {
+    return { x: node.x, y: node.y + HEADER_H + 10 };
+  }
   const paramKeys = Object.keys(schema.params);
   const idx = paramKeys.indexOf(paramKey);
   if (idx === -1) return { x: node.x, y: node.y };

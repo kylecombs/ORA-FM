@@ -61,4 +61,6 @@ export const MOD_DEPTH_SCALES = {
   bwfreq:   400,    // amp 0.5 → ±200 Hz bandwidth deviation
   density:  20,     // amp 0.5 → ±10 impulses/sec density variation
   chaos:    0.5,    // amp 0.5 → ±0.25 chaos param deviation (range 1–2)
+  timbre:   1,      // amp 0.5 → ±0.5 waveshape morph (full range)
+  level:    1,      // amp 0.5 → ±0.5 gate level modulation (full range)
 };

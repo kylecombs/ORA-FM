@@ -9,12 +9,16 @@ export function usePatchIO({
   engineRef,
   scriptRunnerRef,
   envelopeRunnerRef,
+  pulserRunnerRef,
+  sequencerRunnerRef,
   midiListenersRef,
   scopeBuffersRef,
   setNodes,
   setConnections,
   setRunningScripts,
   setRunningEnvelopes,
+  setRunningPulsers,
+  setRunningSequencers,
   setPrintLogs,
   setSelectedNodeId,
   setMidiActivity,
@@ -109,6 +113,8 @@ export function usePatchIO({
         }
         scriptRunnerRef.current?.stopAll?.();
         envelopeRunnerRef.current?.stopAll?.();
+        pulserRunnerRef?.current?.stopAll?.();
+        sequencerRunnerRef?.current?.stopAll?.();
         // Stop all MIDI listeners
         for (const listener of midiListenersRef.current.values()) {
           listener.stop();
@@ -116,6 +122,8 @@ export function usePatchIO({
         midiListenersRef.current.clear();
         setRunningScripts(new Set());
         setRunningEnvelopes(new Set());
+        setRunningPulsers(new Set());
+        setRunningSequencers(new Set());
         setPrintLogs([]);
         setSelectedNodeId(null);
         setMidiActivity({});

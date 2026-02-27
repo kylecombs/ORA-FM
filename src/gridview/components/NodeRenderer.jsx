@@ -12,6 +12,8 @@ export default function NodeRenderer({
   selectedNodeId,
   runningScripts,
   runningEnvelopes,
+  runningPulsers,
+  runningSequencers,
   midiActivity,
   midiListenersRef,
   scopeBuffersRef,
@@ -74,7 +76,7 @@ export default function NodeRenderer({
     <div
       key={node.id}
       data-node-id={node.id}
-      className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ' scope scope-classic' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
+      className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ' scope scope-classic' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) || runningPulsers.has(node.id) || runningSequencers.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
       style={{
         left: node.x,
         top: node.y,
@@ -120,6 +122,18 @@ export default function NodeRenderer({
           title="trigger input"
         >
           <span className="port-label port-label-in">trig</span>
+        </div>
+      )}
+
+      {/* Sequencer trigger input port */}
+      {node.type === 'sequencer' && (
+        <div
+          className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
+          style={{ top: HEADER_H + 10 - 4 }}
+          onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
+          title="clock/trigger input"
+        >
+          <span className="port-label port-label-in">clk</span>
         </div>
       )}
 
@@ -235,6 +249,32 @@ export default function NodeRenderer({
         </div>
       )}
 
+      {/* Sequencer step indicator */}
+      {node.type === 'sequencer' && (
+        <div className="seq-steps" style={{ display: 'flex', gap: 3, padding: '4px 8px 2px' }}>
+          {[0, 1, 2, 3, 4].map((i) => {
+            const active = i < (node.params.length ?? 5);
+            const current = i === (node.seqCurrentStep ?? 0);
+            return (
+              <div
+                key={i}
+                style={{
+                  flex: 1,
+                  height: 6,
+                  borderRadius: 2,
+                  background: !active
+                    ? 'rgba(122,117,112,0.1)'
+                    : current
+                      ? schema.accent
+                      : 'rgba(122,117,112,0.25)',
+                  transition: 'background 0.08s',
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+
       {/* Scope (oscilloscope) display */}
       {node.type === 'scope' && (
         <ScopeCanvas
@@ -340,7 +380,7 @@ export default function NodeRenderer({
       )}
 
       {/* Live indicator */}
-      {(isLive || hasModOutput || runningScripts.has(node.id) || runningEnvelopes.has(node.id)) && <div className="node-live-dot" />}
+      {(isLive || hasModOutput || runningScripts.has(node.id) || runningEnvelopes.has(node.id) || runningPulsers.has(node.id) || runningSequencers.has(node.id)) && <div className="node-live-dot" />}
     </div>
   );
 }
