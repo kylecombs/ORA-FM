@@ -13,9 +13,13 @@ export function useAudioEngine({
   setPrintLogs,
   setRunningScripts,
   setRunningEnvelopes,
+  setRunningPulsers,
+  setRunningSequencers,
   setScriptLogs,
   setMidiDevices,
   midiListenersRef,
+  pulserRunnerRef,
+  sequencerRunnerRef,
 }) {
   const engineRef = useRef(null);
   const scriptRunnerRef = useRef(null);
@@ -208,6 +212,9 @@ export function useAudioEngine({
       node.printPrefix = 'print';
       node.printColor = '#e07050';
     }
+    if (type === 'sequencer') {
+      node.seqCurrentStep = 0;
+    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -226,6 +233,8 @@ export function useAudioEngine({
       engineRef.current?.freeBuffer(id);
       scriptRunnerRef.current?.stop(id);
       envelopeRunnerRef.current?.stop(id);
+      pulserRunnerRef?.current?.stop(id);
+      sequencerRunnerRef?.current?.stop(id);
       scopeBuffersRef.current.delete(id);
       // Stop MIDI listener if this was a midi_in node
       const midiListener = midiListenersRef.current.get(id);
@@ -239,6 +248,16 @@ export function useAudioEngine({
         return next;
       });
       setRunningEnvelopes((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setRunningPulsers((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setRunningSequencers((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;

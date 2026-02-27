@@ -8,6 +8,8 @@ import { useMidi } from './gridview/hooks/useMidi';
 import { useNodeDrag } from './gridview/hooks/useNodeDrag';
 import { useRecording } from './gridview/hooks/useRecording';
 import { usePatchIO } from './gridview/hooks/usePatchIO';
+import { usePulser } from './gridview/hooks/usePulser';
+import { useSequencer } from './gridview/hooks/useSequencer';
 import { useSamplePlayer } from './gridview/hooks/useSamplePlayer';
 import Toolbar from './gridview/components/Toolbar';
 import InstrumentPanel from './gridview/components/InstrumentPanel';
@@ -40,6 +42,12 @@ export default function GridView() {
   // Envelope runtime state
   const [runningEnvelopes, setRunningEnvelopes] = useState(new Set());
 
+  // Pulser runtime state
+  const [runningPulsers, setRunningPulsers] = useState(new Set());
+
+  // Sequencer runtime state
+  const [runningSequencers, setRunningSequencers] = useState(new Set());
+
   // Instrument panel state
   const [panelOpen, setPanelOpen] = useState(false);
 
@@ -65,6 +73,24 @@ export default function GridView() {
     }
   }, [printLogs, consoleOpen]);
 
+  // ── Pulser hook ──────────────────────────────────────────
+  const { pulserRunnerRef } = usePulser({
+    nodes,
+    connections,
+    setNodes,
+    runningPulsers,
+    setRunningPulsers,
+  });
+
+  // ── Sequencer hook ─────────────────────────────────────
+  const { sequencerRunnerRef } = useSequencer({
+    nodes,
+    connections,
+    setNodes,
+    runningSequencers,
+    setRunningSequencers,
+  });
+
   // ── Audio engine hook ──────────────────────────────────
   const {
     engineRef,
@@ -86,9 +112,13 @@ export default function GridView() {
     setPrintLogs,
     setRunningScripts,
     setRunningEnvelopes,
+    setRunningPulsers,
+    setRunningSequencers,
     setScriptLogs,
     setMidiDevices,
     midiListenersRef,
+    pulserRunnerRef,
+    sequencerRunnerRef,
   });
 
   // ── Audio routing hook ─────────────────────────────────
@@ -149,12 +179,16 @@ export default function GridView() {
     engineRef,
     scriptRunnerRef,
     envelopeRunnerRef,
+    pulserRunnerRef,
+    sequencerRunnerRef,
     midiListenersRef,
     scopeBuffersRef,
     setNodes,
     setConnections,
     setRunningScripts,
     setRunningEnvelopes,
+    setRunningPulsers,
+    setRunningSequencers,
     setPrintLogs,
     setSelectedNodeId,
     setMidiActivity,
@@ -667,6 +701,8 @@ export default function GridView() {
               selectedNodeId={selectedNodeId}
               runningScripts={runningScripts}
               runningEnvelopes={runningEnvelopes}
+              runningPulsers={runningPulsers}
+              runningSequencers={runningSequencers}
               midiActivity={midiActivity}
               midiListenersRef={midiListenersRef}
               scopeBuffersRef={scopeBuffersRef}
