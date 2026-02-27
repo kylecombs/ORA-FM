@@ -65,6 +65,7 @@ const FX_DEFS = [
   'ora_attenuator',
   'print',
   'ora_scope',
+  'spectral_freeze',
 ];
 
 const SYSTEM_DEFS = [

@@ -650,6 +650,20 @@ const NODE_SCHEMA = {
       mix:       { label: 'mix',   min: 0,       max: 1,  step: 0.01,  val: 0.5 },
     },
   },
+  spectral_freeze: {
+    label: 'Spectral Freeze',
+    desc: 'freeze & hold spectrum',
+    accent: '#7abfbf',
+    synthDef: 'spectral_freeze',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      freeze: { label: 'freeze', min: 0, max: 1, step: 1,    val: 0 },
+      mix:    { label: 'mix',    min: 0, max: 1, step: 0.01,  val: 1 },
+      amp:    { label: 'amp',    min: 0, max: 1, step: 0.01,  val: 1 },
+    },
+  },
   // ── Utility modules ─────────────────────────────────────
   multiply: {
     label: 'Multiply',
@@ -813,7 +827,7 @@ const MODULE_CATEGORIES = [
     id: 'fx',
     label: 'Effects',
     desc: 'time & space',
-    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger', 'comb'],
+    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger', 'comb', 'spectral_freeze'],
   },
   {
     id: 'utility',
