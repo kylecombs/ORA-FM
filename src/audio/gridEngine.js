@@ -63,6 +63,7 @@ const FX_DEFS = [
   'multiply',
   'print',
   'ora_scope',
+  'spectral_freeze',
 ];
 
 const SYSTEM_DEFS = [
