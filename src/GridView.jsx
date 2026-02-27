@@ -228,6 +228,21 @@ const NODE_SCHEMA = {
       amp:  { label: 'amp',  min: 0,    max: 1,    step: 0.01, val: 0.5 },
     },
   },
+  lfo: {
+    label: 'LFO',
+    desc: 'low-freq oscillator',
+    accent: '#7aab88',
+    synthDef: 'lfo',
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['freq', 'amp', 'phase'],
+    params: {
+      freq:     { label: 'rate', min: 0.01, max: 40, step: 0.01, val: 1 },
+      amp:      { label: 'amp',  min: 0,    max: 1,  step: 0.01, val: 0.5 },
+      waveform: { label: 'wave', min: 0,    max: 3,  step: 1,    val: 0 },
+      width:    { label: 'width',min: 0,    max: 1,  step: 0.01, val: 0.5 },
+    },
+  },
   white_noise_osc: {
     label: 'White Noise',
     desc: 'white noise',
@@ -635,6 +650,20 @@ const NODE_SCHEMA = {
       mix:       { label: 'mix',   min: 0,       max: 1,  step: 0.01,  val: 0.5 },
     },
   },
+  spectral_freeze: {
+    label: 'Spectral Freeze',
+    desc: 'freeze & hold spectrum',
+    accent: '#7abfbf',
+    synthDef: 'spectral_freeze',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      freeze: { label: 'freeze', min: 0, max: 1, step: 1,    val: 0 },
+      mix:    { label: 'mix',    min: 0, max: 1, step: 0.01,  val: 1 },
+      amp:    { label: 'amp',    min: 0, max: 1, step: 0.01,  val: 1 },
+    },
+  },
   // ── Utility modules ─────────────────────────────────────
   multiply: {
     label: 'Multiply',
@@ -646,6 +675,30 @@ const NODE_SCHEMA = {
     outputs: ['out'],
     params: {
       gain: { label: 'gain', min: 0, max: 5000, step: 1, val: 100 },
+    },
+  },
+  gain: {
+    label: 'Gain',
+    desc: 'amplifier',
+    accent: '#a8b870',
+    synthDef: 'ora_gain',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      amp: { label: 'amp', min: 0, max: 4, step: 0.01, val: 1.0 },
+    },
+  },
+  attenuator: {
+    label: 'Attenuator',
+    desc: 'signal reducer',
+    accent: '#8a8a9a',
+    synthDef: 'ora_attenuator',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      level: { label: 'level', min: 0, max: 1, step: 0.01, val: 1.0 },
     },
   },
   print: {
@@ -787,19 +840,25 @@ const MODULE_CATEGORIES = [
     id: 'fx',
     label: 'Effects',
     desc: 'time & space',
-    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger', 'comb'],
+    types: ['fx_reverb', 'fx_echo', 'fx_distortion', 'fx_flanger', 'comb', 'spectral_freeze'],
   },
   {
     id: 'utility',
     label: 'Utility',
     desc: 'signal tools',
-    types: ['multiply', 'print', 'scope'],
+    types: ['gain', 'attenuator', 'multiply', 'print', 'scope'],
   },
   {
     id: 'scripting',
     label: 'Scripting',
     desc: 'code & patterns',
     types: ['script'],
+  },
+  {
+    id: 'modulation',
+    label: 'Modulation',
+    desc: 'LFOs & modulators',
+    types: ['lfo', 'lfnoise0_osc', 'lfnoise1_osc', 'lfnoise2_osc'],
   },
   {
     id: 'control',
@@ -919,59 +978,313 @@ function panForPort(portIndex) {
   return portIndex === 0 ? -0.8 : 0.8;
 }
 
-// ── Oscilloscope canvas component ──────────────────────────
-// Two modes:
-//   'classic' — CRT phosphor-glow with persistence trail, graticule, additive blending
-//   'modern'  — Clean utility trace matching the app's dark aesthetic
-//
-// Data: receives full 1024-sample buffer snapshots from scsynth via /b_getn.
-// Uses rising zero-crossing trigger for a stable, non-scrolling display.
+// ── WebGL Oscilloscope (Geometry-based line renderer) ────────────
+// GPU-accelerated scope using per-segment quad geometry adapted from
+// woscope (https://github.com/m1el/woscope). Each waveform segment is
+// expanded into a quad by the vertex shader; the fragment shader computes
+// analytical Gaussian beam intensity via the error function (erf) for
+// physically accurate CRT beam simulation with natural anti-aliasing.
+// Classic mode: ping-pong FBOs for phosphor persistence with decay.
+// Text readouts rendered via a lightweight Canvas 2D overlay.
 const SCOPE_W = 260;
 const SCOPE_H = 140;
-const SCOPE_H_MODERN = 100;
 const SCOPE_DISPLAY_SAMPLES = 512; // samples to display (half the buffer)
 
-function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
-  const canvasRef = useRef(null);
-  const animRef = useRef(null);
-  const trailRef = useRef(null);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
+// ── Shared fullscreen-quad vertex shader ──
+const QUAD_VERT = `#version 300 es
+in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
 
-  const isClassic = mode === 'classic';
-  const h = isClassic ? SCOPE_H : SCOPE_H_MODERN;
+// ── Graticule + background fragment shader ──
+const GRAT_FRAG = `#version 300 es
+precision highp float;
+uniform vec2 u_resolution;
+uniform float u_mode;
+uniform vec3 u_accent;
+uniform float u_hasSignal;
+uniform sampler2D u_waveform;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+  bool classic = u_mode > 0.5;
+  vec3 bg = classic ? vec3(0.031, 0.031, 0.039) : vec3(0.067, 0.063, 0.063);
+  float grat = 0.0;
+  vec3 gc = vec3(0.478, 0.459, 0.439);
+  if (classic) {
+    for (float i = 1.0; i < 5.0; i += 1.0) {
+      float d = abs(v_uv.y - i / 5.0) * u_resolution.y;
+      grat = max(grat, smoothstep(0.7, 0.0, d) * 0.08);
+    }
+    for (float i = 1.0; i < 8.0; i += 1.0) {
+      float d = abs(v_uv.x - i / 8.0) * u_resolution.x;
+      grat = max(grat, smoothstep(0.7, 0.0, d) * 0.08);
+    }
+  }
+  float cd = abs(v_uv.y - 0.5) * u_resolution.y;
+  grat = max(grat, smoothstep(0.7, 0.0, cd) * (classic ? 0.18 : 0.12));
+  if (!classic) {
+    float q1 = abs(v_uv.y - 0.25) * u_resolution.y;
+    float q3 = abs(v_uv.y - 0.75) * u_resolution.y;
+    grat = max(grat, smoothstep(0.7, 0.0, q1) * 0.05);
+    grat = max(grat, smoothstep(0.7, 0.0, q3) * 0.05);
+  }
+  vec3 color = bg + gc * grat;
+  if (!classic && u_hasSignal > 0.5) {
+    float s = texture(u_waveform, vec2(v_uv.x, 0.5)).r;
+    if (v_uv.y < s) color += u_accent * 0.06;
+  }
+  fragColor = vec4(color, 1.0);
+}`;
+
+// ── Woscope-style line vertex shader ──
+// Expands 4 colocated vertices per sample into a quad around each
+// line segment. Works in pixel space for correct aspect ratio.
+const LINE_VERT = `#version 300 es
+precision highp float;
+uniform float uSize;
+uniform vec2 uResolution;
+in vec2 aStart;
+in vec2 aEnd;
+in float aIdx;
+out vec4 vLine;
+void main() {
+  vec2 sPx = (aStart * 0.5 + 0.5) * uResolution;
+  vec2 ePx = (aEnd * 0.5 + 0.5) * uResolution;
+  float idx = mod(aIdx, 4.0);
+  vec2 current;
+  float tang;
+  if (idx >= 2.0) { current = ePx; tang = 1.0; }
+  else { current = sPx; tang = -1.0; }
+  float side = (mod(idx, 2.0) - 0.5) * 2.0;
+  vec2 dir = ePx - sPx;
+  float len = length(dir);
+  vLine = vec4(tang, side, len, 0.0);
+  if (len > 0.001) dir /= len;
+  else dir = vec2(1.0, 0.0);
+  vec2 norm = vec2(-dir.y, dir.x);
+  vec2 posPx = current + (tang * dir + norm * side) * uSize;
+  gl_Position = vec4(posPx / uResolution * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// ── Woscope-style line fragment shader ──
+// Analytical Gaussian beam intensity via error function (erf).
+// Physically models a CRT electron beam's intensity profile.
+const LINE_FRAG = `#version 300 es
+precision highp float;
+#define SQRT2 1.4142135623730951
+uniform float uSize;
+uniform float uIntensity;
+uniform vec3 uColor;
+in vec4 vLine;
+out vec4 fragColor;
+float erf(float x) {
+  float s = sign(x), a = abs(x);
+  x = 1.0 + (0.278393 + (0.230389 + (0.000972 + 0.078108 * a) * a) * a) * a;
+  x *= x;
+  return s - s / (x * x);
+}
+void main() {
+  float len = vLine.z;
+  vec2 xy = vec2((len * 0.5 + uSize) * vLine.x + len * 0.5, uSize * vLine.y);
+  float sigma = uSize / 4.0;
+  float alpha;
+  if (len < 0.001) {
+    alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) * 0.5;
+  } else {
+    alpha = erf((len - xy.x) / SQRT2 / sigma) + erf(xy.x / SQRT2 / sigma);
+    // sqrt normalization instead of linear (/ len * uSize) to reduce
+    // velocity-based dimming — keeps fast-moving zero-crossing regions
+    // visible at high frequencies while still dimming proportionally.
+    alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) * 0.5 * sqrt(uSize / max(len, uSize));
+  }
+  alpha *= uIntensity;
+  fragColor = vec4(uColor * alpha, alpha);
+}`;
+
+// ── WebGL helpers ──────────────────────────────────────────────
+function scopeCompileShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error('[Scope] shader error:', gl.getShaderInfoLog(s));
+    gl.deleteShader(s);
+    return null;
+  }
+  return s;
+}
+
+function scopeCreateProgram(gl, vSrc, fSrc) {
+  const vs = scopeCompileShader(gl, gl.VERTEX_SHADER, vSrc);
+  const fs = scopeCompileShader(gl, gl.FRAGMENT_SHADER, fSrc);
+  if (!vs || !fs) return null;
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error('[Scope] program error:', gl.getProgramInfoLog(p));
+    return null;
+  }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  return p;
+}
+
+function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor }) {
+  const canvasRef = useRef(null);
+  const textCanvasRef = useRef(null);
+  const animRef = useRef(null);
+  const glStateRef = useRef(null);
+  const normBuf = useRef(new Float32Array(SCOPE_DISPLAY_SAMPLES));
+
+  const h = SCOPE_H;
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
 
-    // Off-screen canvas for classic persistence trail
-    const trail = document.createElement('canvas');
-    trail.width = SCOPE_W;
-    trail.height = SCOPE_H;
-    const tctx = trail.getContext('2d');
-    tctx.fillStyle = '#08080a';
-    tctx.fillRect(0, 0, SCOPE_W, SCOPE_H);
-    trailRef.current = trail;
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+    if (!gl) {
+      console.warn('[Scope] WebGL2 not available');
+      return;
+    }
 
-    // Parse accent hex → rgba helper
-    const r = parseInt(accentColor.slice(1, 3), 16);
-    const g = parseInt(accentColor.slice(3, 5), 16);
-    const b = parseInt(accentColor.slice(5, 7), 16);
-    const accentRgba = (a) => `rgba(${r},${g},${b},${a})`;
+    gl.getExtension('OES_texture_float_linear');
 
-    // Find a rising zero-crossing in the buffer for stable triggering.
-    // Searches the first half so we always have SCOPE_DISPLAY_SAMPLES after trigger.
-    const findTrigger = (buf) => {
-      const searchEnd = buf.length - SCOPE_DISPLAY_SAMPLES;
-      for (let i = 0; i < searchEnd - 1; i++) {
-        if (buf[i] <= 0 && buf[i + 1] > 0) return i;
+    // ── Compile shader programs ──
+    const gratProg = scopeCreateProgram(gl, QUAD_VERT, GRAT_FRAG);
+    const lineProg = scopeCreateProgram(gl, LINE_VERT, LINE_FRAG);
+    if (!gratProg || !lineProg) return;
+
+    // ── Uniform locations ──
+    const gratU = {
+      resolution: gl.getUniformLocation(gratProg, 'u_resolution'),
+      mode:       gl.getUniformLocation(gratProg, 'u_mode'),
+      accent:     gl.getUniformLocation(gratProg, 'u_accent'),
+      hasSignal:  gl.getUniformLocation(gratProg, 'u_hasSignal'),
+      waveform:   gl.getUniformLocation(gratProg, 'u_waveform'),
+    };
+    const lineU = {
+      size:       gl.getUniformLocation(lineProg, 'uSize'),
+      resolution: gl.getUniformLocation(lineProg, 'uResolution'),
+      intensity:  gl.getUniformLocation(lineProg, 'uIntensity'),
+      color:      gl.getUniformLocation(lineProg, 'uColor'),
+    };
+    // ── Shared fullscreen quad VBO ──
+    const quadVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+    // Graticule VAO
+    const gratVao = gl.createVertexArray();
+    gl.bindVertexArray(gratVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    const gratPosLoc = gl.getAttribLocation(gratProg, 'a_pos');
+    gl.enableVertexAttribArray(gratPosLoc);
+    gl.vertexAttribPointer(gratPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    // ── Line segment geometry buffers ──
+    const maxSegments = SCOPE_DISPLAY_SAMPLES - 1;
+    const maxVerts = maxSegments * 4;
+
+    // Scratch buffer: 4 copies of (x,y) per sample, updated each frame
+    const scratchBuf = new Float32Array(SCOPE_DISPLAY_SAMPLES * 8);
+    const lineVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, scratchBuf.byteLength, gl.DYNAMIC_DRAW);
+
+    // Static vertex index attribute: [0, 1, 2, 3, 4, 5, ...]
+    const idxData = new Float32Array(maxVerts);
+    for (let i = 0; i < maxVerts; i++) idxData[i] = i;
+    const idxVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, idxVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, idxData, gl.STATIC_DRAW);
+
+    // Static element index buffer (2 triangles per segment quad)
+    const ebo = gl.createBuffer();
+    const indices = new Uint16Array(maxSegments * 6);
+    for (let i = 0; i < maxSegments; i++) {
+      const b = i * 4, o = i * 6;
+      indices[o] = b; indices[o+1] = b+1; indices[o+2] = b+2;
+      indices[o+3] = b+2; indices[o+4] = b+1; indices[o+5] = b+3;
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+    // Line VAO — woscope stride trick: aStart/aEnd read from same VBO
+    // at 1-sample offset. Each sample is stored 4× as (x,y) pairs.
+    // Stride = 8 bytes (one vec2). aEnd offset = 32 bytes (4 vec2 = next sample).
+    const lineVao = gl.createVertexArray();
+    gl.bindVertexArray(lineVao);
+    const aStartLoc = gl.getAttribLocation(lineProg, 'aStart');
+    const aEndLoc   = gl.getAttribLocation(lineProg, 'aEnd');
+    const aIdxLoc   = gl.getAttribLocation(lineProg, 'aIdx');
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+    gl.enableVertexAttribArray(aStartLoc);
+    gl.vertexAttribPointer(aStartLoc, 2, gl.FLOAT, false, 8, 0);
+    gl.enableVertexAttribArray(aEndLoc);
+    gl.vertexAttribPointer(aEndLoc, 2, gl.FLOAT, false, 8, 32);
+    gl.bindBuffer(gl.ARRAY_BUFFER, idxVbo);
+    gl.enableVertexAttribArray(aIdxLoc);
+    gl.vertexAttribPointer(aIdxLoc, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bindVertexArray(null);
+
+    // ── Waveform texture (for modern fill-under-curve) ──
+    const waveTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, waveTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, SCOPE_DISPLAY_SAMPLES, 1, 0,
+                  gl.RED, gl.FLOAT, new Float32Array(SCOPE_DISPLAY_SAMPLES));
+
+    // Accent color (0–1 float)
+    const ar = parseInt(accentColor.slice(1, 3), 16) / 255;
+    const ag = parseInt(accentColor.slice(3, 5), 16) / 255;
+    const ab = parseInt(accentColor.slice(5, 7), 16) / 255;
+
+    const state = { smoothYMin: null, smoothYMax: null, lastTrigIdx: -1 };
+    glStateRef.current = state;
+
+    const tctx = textCanvasRef.current?.getContext('2d');
+
+    // ── Helpers ──
+    // Find rising zero-crossing with sub-sample interpolation and
+    // hysteresis: prefer a crossing within ±10 samples of the previous
+    // trigger to prevent the display from jumping between distant
+    // crossings (which causes "double tracing" in CRT persistence).
+    const findTrigger = (buf, prevTrigIdx) => {
+      const end = buf.length - SCOPE_DISPLAY_SAMPLES;
+      // Hysteresis: search near previous trigger first
+      if (prevTrigIdx >= 0 && prevTrigIdx < end) {
+        const lo = Math.max(0, prevTrigIdx - 10);
+        const hi = Math.min(end - 1, prevTrigIdx + 10);
+        for (let i = lo; i < hi; i++) {
+          if (buf[i] <= 0 && buf[i + 1] > 0) {
+            const frac = -buf[i] / (buf[i + 1] - buf[i]);
+            return { index: i, frac };
+          }
+        }
       }
-      return 0; // fallback: no zero-crossing found
+      // Fall back to first crossing
+      for (let i = 0; i < end - 1; i++) {
+        if (buf[i] <= 0 && buf[i + 1] > 0) {
+          const frac = -buf[i] / (buf[i + 1] - buf[i]);
+          return { index: i, frac };
+        }
+      }
+      return { index: 0, frac: 0 };
     };
 
-    // Compute auto-scaled Y bounds from a contiguous slice
     const computeYBounds = (buf, start, count) => {
       let min = Infinity, max = -Infinity;
       for (let i = start; i < start + count; i++) {
@@ -980,202 +1293,169 @@ function ScopeCanvas({ buffersRef, nodeId, bufferSize, accentColor, mode }) {
         if (v > max) max = v;
       }
       if (max - min < 0.001) { min -= 0.5; max += 0.5; }
-      const pad = (max - min) * 0.12 || 0.1;
+      const pad = (max - min) * 0.15 || 0.1;
       return { yMin: min - pad, yMax: max + pad };
     };
 
-    // Build vertex path from contiguous slice
-    const buildPath = (buf, start, count, w, h, yMin, yScale) => {
-      const pts = [];
-      for (let i = 0; i < count; i++) {
-        const v = buf[start + i];
-        pts.push({ x: (i / (count - 1)) * w, y: h - (v - yMin) * yScale });
-      }
-      return pts;
-    };
-
-    // Stroke a path onto a context
-    const strokePath = (c, pts) => {
-      c.beginPath();
-      for (let i = 0; i < pts.length; i++) {
-        if (i === 0) c.moveTo(pts[i].x, pts[i].y);
-        else c.lineTo(pts[i].x, pts[i].y);
-      }
-      c.stroke();
-    };
-
-    // ── Classic mode draw (phosphor CRT) ──
-    const drawClassic = () => {
-      const w = SCOPE_W;
-      const ch = SCOPE_H;
-      const buf = buffersRef.current.get(nodeId);
-
-      // Phosphor persistence: fade previous frame
-      tctx.globalCompositeOperation = 'source-over';
-      tctx.fillStyle = 'rgba(8, 8, 10, 0.12)';
-      tctx.fillRect(0, 0, w, ch);
-
-      if (buf && buf.length >= SCOPE_DISPLAY_SAMPLES) {
-        const trigIdx = findTrigger(buf);
-        const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
-        const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
-        const yScale = ch / (yMax - yMin);
-        const pts = buildPath(buf, trigIdx, displayLen, w, ch, yMin, yScale);
-
-        tctx.globalCompositeOperation = 'lighter';
-        tctx.lineJoin = 'round';
-        tctx.lineCap = 'round';
-
-        // Glow layer (wide, soft)
-        tctx.strokeStyle = accentRgba(0.15);
-        tctx.lineWidth = 6;
-        strokePath(tctx, pts);
-
-        // Mid glow
-        tctx.strokeStyle = accentRgba(0.3);
-        tctx.lineWidth = 3;
-        strokePath(tctx, pts);
-
-        // Core trace (bright, thin)
-        tctx.strokeStyle = accentRgba(0.9);
-        tctx.lineWidth = 1.5;
-        strokePath(tctx, pts);
-
-        tctx.globalCompositeOperation = 'source-over';
-      }
-
-      // Compose final frame
-      ctx.fillStyle = '#08080a';
-      ctx.fillRect(0, 0, w, ch);
-
-      // Graticule
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.08)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 5; i++) {
-        const y = Math.round(ch * (i / 5)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      }
-      for (let i = 1; i < 8; i++) {
-        const x = Math.round(w * (i / 8)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
-      }
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.18)';
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(ch / 2) + 0.5);
-      ctx.lineTo(w, Math.round(ch / 2) + 0.5);
-      ctx.stroke();
-
-      // Persistence trail
-      ctx.drawImage(trail, 0, 0);
-
-      // Value readout (peak amplitude)
-      if (buf && buf.length > 0) {
-        let peak = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const abs = Math.abs(buf[i]);
-          if (abs > peak) peak = abs;
-        }
-        ctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
-        ctx.font = '10px "DM Mono", monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(peak.toFixed(3), w - 5, 13);
-      }
-    };
-
-    // ── Modern mode draw (clean utility) ──
-    const drawModern = () => {
-      const w = SCOPE_W;
-      const mh = SCOPE_H_MODERN;
-      const buf = buffersRef.current.get(nodeId);
-
-      ctx.fillStyle = '#111010';
-      ctx.fillRect(0, 0, w, mh);
-
-      // Subtle center line
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.12)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 2) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 2) + 0.5);
-      ctx.stroke();
-
-      // Quarter lines
-      ctx.strokeStyle = 'rgba(122, 117, 112, 0.05)';
-      ctx.beginPath();
-      ctx.moveTo(0, Math.round(mh / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh / 4) + 0.5);
-      ctx.moveTo(0, Math.round(mh * 3 / 4) + 0.5);
-      ctx.lineTo(w, Math.round(mh * 3 / 4) + 0.5);
-      ctx.stroke();
-
-      if (!buf || buf.length < SCOPE_DISPLAY_SAMPLES) {
-        // "No signal" text
-        ctx.fillStyle = 'rgba(122, 117, 112, 0.25)';
-        ctx.font = '9px "DM Mono", monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('no signal', w / 2, mh / 2 + 3);
-        return;
-      }
-
-      const trigIdx = findTrigger(buf);
-      const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
-      const { yMin, yMax } = computeYBounds(buf, trigIdx, displayLen);
-      const yScale = mh / (yMax - yMin);
-      const pts = buildPath(buf, trigIdx, displayLen, w, mh, yMin, yScale);
-
-      // Filled area under curve (subtle)
-      ctx.fillStyle = accentRgba(0.06);
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, mh);
-      for (const p of pts) ctx.lineTo(p.x, p.y);
-      ctx.lineTo(pts[pts.length - 1].x, mh);
-      ctx.closePath();
-      ctx.fill();
-
-      // Main trace
-      ctx.strokeStyle = accentRgba(0.7);
-      ctx.lineWidth = 1.5;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      strokePath(ctx, pts);
-
-      // Value readout (peak amplitude)
-      let peak = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const abs = Math.abs(buf[i]);
-        if (abs > peak) peak = abs;
-      }
-      ctx.fillStyle = 'rgba(212, 207, 200, 0.4)';
-      ctx.font = '9px "DM Mono", monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(peak.toFixed(3), w - 4, 10);
-
-      // Min/max range
-      ctx.fillStyle = 'rgba(122, 117, 112, 0.3)';
-      ctx.textAlign = 'left';
-      ctx.fillText(yMin.toFixed(1), 4, mh - 4);
-      ctx.fillText(yMax.toFixed(1), 4, 10);
-    };
-
+    // ── Draw loop ──
     const draw = () => {
-      if (modeRef.current === 'classic') drawClassic();
-      else drawModern();
+      const ch = SCOPE_H;
+
+      if (canvas.height !== ch) canvas.height = ch;
+      const tc = textCanvasRef.current;
+      if (tc && tc.height !== ch) tc.height = ch;
+
+      const buf = buffersRef.current.get(nodeId);
+      const hasSignal = buf && buf.length >= SCOPE_DISPLAY_SAMPLES;
+
+      let yMin = 0, yMax = 1;
+      let numSegments = 0;
+
+      // Reset state when signal is lost so reconnection starts fresh
+      if (!hasSignal && state.smoothYMin !== null) {
+        state.smoothYMin = null;
+        state.smoothYMax = null;
+        state.lastTrigIdx = -1;
+      }
+
+      if (hasSignal) {
+        const trig = findTrigger(buf, state.lastTrigIdx);
+        const trigIdx = trig.index;
+        state.lastTrigIdx = trigIdx;
+        const trigFrac = trig.frac;
+        const displayLen = Math.min(SCOPE_DISPLAY_SAMPLES, buf.length - trigIdx);
+        const bounds = computeYBounds(buf, trigIdx, displayLen);
+
+        // Smooth Y-axis bounds (EMA α=0.18)
+        if (state.smoothYMin === null) {
+          state.smoothYMin = bounds.yMin;
+          state.smoothYMax = bounds.yMax;
+        } else {
+          state.smoothYMin += (bounds.yMin - state.smoothYMin) * 0.18;
+          state.smoothYMax += (bounds.yMax - state.smoothYMax) * 0.18;
+        }
+        yMin = state.smoothYMin;
+        yMax = state.smoothYMax;
+        const range = yMax - yMin;
+
+        const norm = normBuf.current;
+        for (let i = 0; i < displayLen; i++) {
+          norm[i] = Math.max(0, Math.min(1, (buf[trigIdx + i] - yMin) / range));
+        }
+
+        // Build line geometry: 4 copies of (x,y) per sample in clip space
+        numSegments = displayLen - 1;
+        const dx = 2.0 / (displayLen - 1);
+        const xOff = -trigFrac * dx; // sub-sample trigger alignment
+        for (let i = 0; i < displayLen; i++) {
+          const x = i * dx - 1.0 + xOff;
+          const y = norm[i] * 2.0 - 1.0;
+          const b = i * 8;
+          scratchBuf[b] = x; scratchBuf[b+1] = y;
+          scratchBuf[b+2] = x; scratchBuf[b+3] = y;
+          scratchBuf[b+4] = x; scratchBuf[b+5] = y;
+          scratchBuf[b+6] = x; scratchBuf[b+7] = y;
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, lineVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, scratchBuf.subarray(0, displayLen * 8));
+      }
+
+      // ── Render: CRT mode with multi-pass glow ──
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, SCOPE_W, SCOPE_H);
+      gl.disable(gl.BLEND);
+
+      // Graticule + background
+      gl.useProgram(gratProg);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, waveTex);
+      gl.uniform1i(gratU.waveform, 0);
+      gl.uniform2f(gratU.resolution, SCOPE_W, SCOPE_H);
+      gl.uniform1f(gratU.mode, 1.0);
+      gl.uniform3f(gratU.accent, ar, ag, ab);
+      gl.uniform1f(gratU.hasSignal, 0.0);
+      gl.bindVertexArray(gratVao);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Waveform lines with multi-pass glow (core + mid + outer)
+      if (hasSignal && numSegments > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.useProgram(lineProg);
+        gl.uniform2f(lineU.resolution, SCOPE_W, SCOPE_H);
+        gl.uniform3f(lineU.color, ar, ag, ab);
+        gl.bindVertexArray(lineVao);
+
+        gl.uniform1f(lineU.size, 2.5);
+        gl.uniform1f(lineU.intensity, 1.4);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+        gl.uniform1f(lineU.size, 6.0);
+        gl.uniform1f(lineU.intensity, 0.45);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+        gl.uniform1f(lineU.size, 12.0);
+        gl.uniform1f(lineU.intensity, 0.18);
+        gl.drawElements(gl.TRIANGLES, numSegments * 6, gl.UNSIGNED_SHORT, 0);
+
+        gl.disable(gl.BLEND);
+      }
+
+      // ── Text overlay ──
+      if (tctx) {
+        tctx.clearRect(0, 0, SCOPE_W, SCOPE_H);
+
+        if (hasSignal) {
+          let peak = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const a = Math.abs(buf[i]);
+            if (a > peak) peak = a;
+          }
+
+          tctx.fillStyle = 'rgba(212, 207, 200, 0.45)';
+          tctx.font = '10px "DM Mono", monospace';
+          tctx.textAlign = 'right';
+          tctx.fillText(peak.toFixed(3), SCOPE_W - 5, 13);
+        }
+      }
+
       animRef.current = requestAnimationFrame(draw);
     };
 
     animRef.current = requestAnimationFrame(draw);
+
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
+      gl.deleteProgram(gratProg);
+      gl.deleteProgram(lineProg);
+      gl.deleteTexture(waveTex);
+      gl.deleteBuffer(quadVbo);
+      gl.deleteBuffer(lineVbo);
+      gl.deleteBuffer(idxVbo);
+      gl.deleteBuffer(ebo);
+      gl.deleteVertexArray(gratVao);
+      gl.deleteVertexArray(lineVao);
+      glStateRef.current = null;
     };
   }, [buffersRef, nodeId, bufferSize, accentColor]);
 
   return (
-    <div className={`scope-body ${isClassic ? 'scope-classic' : 'scope-modern'}`}>
+    <div className="scope-body scope-classic">
       <canvas
         ref={canvasRef}
         className="scope-canvas"
         width={SCOPE_W}
         height={h}
+      />
+      <canvas
+        ref={textCanvasRef}
+        width={SCOPE_W}
+        height={h}
+        style={{
+          position: 'absolute', top: 0, left: 0,
+          display: 'block', width: '100%',
+          height: `${h}px`, pointerEvents: 'none',
+        }}
       />
     </div>
   );
@@ -1241,6 +1521,14 @@ export default function GridView() {
   const clockMidiInRef = useRef(new Map());    // nodeId → MidiClockIn
   const clockMidiOutRef = useRef(new Map());   // nodeId → MidiClockOut
   const [clockBeatFlash, setClockBeatFlash] = useState({}); // nodeId → timestamp
+
+  // Recording state
+  const [recording, setRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0); // seconds
+  const recorderRef = useRef(null); // MediaRecorder instance
+  const recChunksRef = useRef([]); // recorded data chunks
+  const recTimerRef = useRef(null); // interval for elapsed time display
+  const recStreamDestRef = useRef(null); // MediaStreamDestination node (reused)
 
   // Scope (oscilloscope) state — ring buffer per scope node
     // Scope (oscilloscope) state — full waveform snapshot per scope node
@@ -1845,6 +2133,7 @@ export default function GridView() {
         }
         if (nodes[id].type === 'scope') {
           engine.stopScope(nid);
+          scopeBuffersRef.current.delete(nid);
         }
         engine.stop(nid);
       }
@@ -1857,7 +2146,13 @@ export default function GridView() {
         const prev = prevRouting[id];
         const cur = nodeRouting[id];
         if (!prev || prev.inBus !== cur.inBus || prev.outBus !== cur.outBus) {
-  engine.stop(id);
+          // Clear stale scope data so the display resets during restart.
+          // Don't call stopScope here — it schedules a delayed /b_free that
+          // would race with the /b_alloc in startScope (Step 8).
+          if (nodes[id]?.type === 'scope') {
+            scopeBuffersRef.current.delete(id);
+          }
+          engine.stop(id);
         }
       }
     }
@@ -2131,9 +2426,6 @@ export default function GridView() {
       node.printPrefix = 'print';
       node.printColor = '#e07050';
     }
-    if (type === 'scope') {
-      node.scopeMode = 'modern'; // 'modern' (clean utility) or 'classic' (phosphor CRT)
-    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -2276,15 +2568,6 @@ export default function GridView() {
     setPrintLogs([]);
   }, []);
 
-  // ── Scope mode toggle ─────────────────────────────────
-  const handleScopeModeToggle = useCallback((nodeId) => {
-    setNodes((prev) => {
-      const node = prev[nodeId];
-      if (!node) return prev;
-      const next = node.scopeMode === 'classic' ? 'modern' : 'classic';
-      return { ...prev, [nodeId]: { ...node, scopeMode: next } };
-    });
-  }, []);
 
   // ── Envelope handlers ──────────────────────────────────
   const handleBreakpointsChange = useCallback((nodeId, breakpoints, curves) => {
@@ -2470,7 +2753,6 @@ export default function GridView() {
         if (node.printPrefix != null) entry.printPrefix = node.printPrefix;
         if (node.printColor != null) entry.printColor = node.printColor;
         if (node.bangSize != null) entry.bangSize = node.bangSize;
-        if (node.scopeMode != null) entry.scopeMode = node.scopeMode;
         if (node.midiMode != null) entry.midiMode = node.midiMode;
         if (node.midiChannel != null) entry.midiChannel = node.midiChannel;
         if (node.midiCcNumber != null) entry.midiCcNumber = node.midiCcNumber;
@@ -2576,7 +2858,6 @@ export default function GridView() {
           if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
           if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
           if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
-          if (n.scopeMode != null) restoredNodes[n.id].scopeMode = n.scopeMode;
           if (n.midiMode != null) restoredNodes[n.id].midiMode = n.midiMode;
           if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
           if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
@@ -2619,6 +2900,80 @@ export default function GridView() {
     // Reset input so the same file can be loaded again
     e.target.value = '';
   }, [nodes]);
+
+  // ── Audio recording ───────────────────────────────────────
+  const handleToggleRecording = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    if (recording) {
+      // ── Stop recording ──
+      recorderRef.current?.stop();
+      clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+      setRecording(false);
+      setRecordingTime(0);
+      return;
+    }
+
+    // ── Start recording ──
+    const ctx = engine.getAudioContext();
+    const outputNode = engine.getOutputNode();
+    if (!ctx || !outputNode) {
+      setStatus('Cannot record — audio engine not ready');
+      return;
+    }
+
+    // Create (or reuse) a MediaStreamDestination
+    if (!recStreamDestRef.current) {
+      recStreamDestRef.current = ctx.createMediaStreamDestination();
+      outputNode.connect(recStreamDestRef.current);
+    }
+
+    recChunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+
+    const recorder = new MediaRecorder(recStreamDestRef.current.stream, { mimeType });
+    recorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recChunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(recChunksRef.current, { type: mimeType });
+      const ext = mimeType.includes('webm') ? 'webm' : 'ogg';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ora-recording-${ts}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus('Recording saved');
+    };
+
+    recorder.start(250); // collect chunks every 250ms
+    setRecording(true);
+    setRecordingTime(0);
+    setStatus('Recording…');
+
+    // Elapsed-time timer (ticks every second)
+    const t0 = Date.now();
+    recTimerRef.current = setInterval(() => {
+      setRecordingTime(Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+  }, [recording]);
+
+  // Clean up recording on unmount
+  useEffect(() => {
+    return () => {
+      recorderRef.current?.stop();
+      clearInterval(recTimerRef.current);
+    };
+  }, []);
 
   // ── External trigger detection (rising-edge on modulated trig param) ──
   const prevTrigVals = useRef({}); // nodeId → previous trigger source value
@@ -3171,24 +3526,12 @@ export default function GridView() {
 
         {/* Scope (oscilloscope) display */}
         {node.type === 'scope' && (
-          <>
-            <ScopeCanvas
-              buffersRef={scopeBuffersRef}
-              nodeId={node.id}
-              bufferSize={SCOPE_BUFFER_SIZE}
-              accentColor={schema.accent}
-              mode={node.scopeMode || 'modern'}
-            />
-            <div className="scope-controls">
-              <button
-                className="scope-mode-btn"
-                onClick={(e) => { e.stopPropagation(); handleScopeModeToggle(node.id); }}
-                title={`Switch to ${(node.scopeMode || 'modern') === 'classic' ? 'modern' : 'classic'} mode`}
-              >
-                {(node.scopeMode || 'modern') === 'classic' ? 'CRT' : 'clean'}
-              </button>
-            </div>
-          </>
+          <ScopeCanvas
+            buffersRef={scopeBuffersRef}
+            nodeId={node.id}
+            bufferSize={SCOPE_BUFFER_SIZE}
+            accentColor={schema.accent}
+          />
         )}
 
         {/* MIDI input display */}
@@ -3290,13 +3633,15 @@ export default function GridView() {
                   <span className="param-val">
                     {isAudioRateMod
                       ? (key === 'freq' ? 'FM' : key === 'amp' ? 'AM' : 'PM')
-                      : key === 'freq' && node.quantize
-                        ? freqToNoteName(displayVal)
-                        : displayVal >= 100
-                          ? Math.round(displayVal)
-                          : displayVal.toFixed(
-                              def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                            )}
+                      : key === 'waveform'
+                        ? ['sin', 'tri', 'saw', 'pls'][Math.round(displayVal)] ?? displayVal
+                        : key === 'freq' && node.quantize
+                          ? freqToNoteName(displayVal)
+                          : displayVal >= 100
+                            ? Math.round(displayVal)
+                            : displayVal.toFixed(
+                                def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
+                              )}
                   </span>
                 </div>
               );
@@ -3386,6 +3731,19 @@ export default function GridView() {
             title="Load patch from JSON file"
           >
             Load
+          </button>
+
+          <div className="toolbar-divider" />
+
+          <button
+            className={`toolbar-btn rec-btn${recording ? ' recording' : ''}`}
+            onClick={handleToggleRecording}
+            disabled={!booted}
+            title={recording ? 'Stop recording and save' : 'Record audio output'}
+          >
+            {recording
+              ? `Stop ${Math.floor(recordingTime / 60)}:${String(recordingTime % 60).padStart(2, '0')}`
+              : 'Rec'}
           </button>
 
           <input
@@ -3705,34 +4063,6 @@ export default function GridView() {
                   ) : selNode.type === 'scope' ? (
                     <div className="details-body">
                       <div className="scope-details-options">
-                        <div className="scope-mode-option">
-                          <span className="scope-mode-label">Display mode</span>
-                          <div className="scope-mode-toggle-group">
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'classic' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'classic' },
-                              }))}
-                            >
-                              Classic
-                            </button>
-                            <button
-                              className={`scope-mode-choice${(selNode.scopeMode || 'modern') === 'modern' ? ' active' : ''}`}
-                              onClick={() => setNodes((prev) => ({
-                                ...prev,
-                                [selNode.id]: { ...prev[selNode.id], scopeMode: 'modern' },
-                              }))}
-                            >
-                              Modern
-                            </button>
-                          </div>
-                        </div>
-                        <div className="scope-mode-desc">
-                          {(selNode.scopeMode || 'modern') === 'classic'
-                            ? 'CRT phosphor glow with persistence trail and graticule grid.'
-                            : 'Clean utility trace with filled area, matching the app aesthetic.'}
-                        </div>
                         <div className="print-hint">
                           Connect a signal source to visualize the waveform.
                           Displays values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.

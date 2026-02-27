@@ -61,8 +61,11 @@ const FX_DEFS = [
   'resonz',
   'comb',
   'multiply',
+  'ora_gain',
+  'ora_attenuator',
   'print',
   'ora_scope',
+  'spectral_freeze',
 ];
 
 const SYSTEM_DEFS = [
@@ -306,6 +309,16 @@ export class GridEngine {
     }
   }
 
+  // Expose the AudioContext (for recording, analysis, etc.)
+  getAudioContext() {
+    return this.sonic?.audioContext ?? null;
+  }
+
+  // Expose the SuperSonic output AudioNode (for routing to MediaStreamDestination)
+  getOutputNode() {
+    return this.sonic?.node ?? null;
+  }
+
   isPlaying(graphId) {
     return this._active.has(graphId);
   }
@@ -392,7 +405,7 @@ export class GridEngine {
             this.sonic.send('/b_getn', buf, 0, GridEngine.SCOPE_BUF_FRAMES);
           } catch { /* ignore */ }
         }
-      }, 33); // ~30 Hz
+      }, 33); // ~30 Hz — must be >= buffer fill time (1024/44100 ≈ 23ms)
     }
 
     return bufnum;
