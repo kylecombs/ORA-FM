@@ -230,6 +230,7 @@ export function useAudioEngine({
     (id) => {
       engineRef.current?.stop(id);
       engineRef.current?.stopScope(id);
+      engineRef.current?.freeBuffer(id);
       scriptRunnerRef.current?.stop(id);
       envelopeRunnerRef.current?.stop(id);
       pulserRunnerRef?.current?.stop(id);

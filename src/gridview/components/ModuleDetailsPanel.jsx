@@ -20,6 +20,11 @@ export default function ModuleDetailsPanel({
   handleQuantizeToggle,
   handlePrintPrefix,
   handlePrintColor,
+  // Sample player props
+  sampleData,
+  sampleFileInputRef,
+  sampleLoadTargetRef,
+  handleLoadBuiltinSample,
 }) {
   const selNode = selectedNodeId != null ? nodes[selectedNodeId] : null;
   const selSchema = selNode ? NODE_SCHEMA[selNode.type] : null;
@@ -227,6 +232,83 @@ export default function ModuleDetailsPanel({
                 <div className="print-hint">
                   Connect a signal source to visualize the waveform.
                   Displays values at ~30 Hz — ideal for envelopes, LFOs, and amplitude changes.
+                </div>
+              </div>
+            </div>
+          ) : selNode.type === 'sample_player' ? (
+            <div className="details-body">
+              <div className="sampler-details">
+                <div className="sampler-detail-section">
+                  <span className="sampler-detail-label">Built-in samples</span>
+                  <select
+                    className="sampler-sample-select"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleLoadBuiltinSample?.(selNode.id, e.target.value);
+                      }
+                    }}
+                  >
+                    <option value="">Select a sample...</option>
+                    <optgroup label="Ambient">
+                      {['ambi_choir', 'ambi_dark_woosh', 'ambi_drone', 'ambi_glass_hum',
+                        'ambi_glass_rub', 'ambi_haunted_hum', 'ambi_lunar_land', 'ambi_piano',
+                        'ambi_sauna', 'ambi_soft_buzz', 'ambi_swoosh'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Drums">
+                      {['bd_808', 'bd_boom', 'bd_fat', 'bd_haus', 'bd_klub', 'bd_pure',
+                        'bd_tek', 'bd_zum', 'drum_bass_hard', 'drum_bass_soft',
+                        'drum_cymbal_closed', 'drum_cymbal_open', 'drum_heavy_kick',
+                        'drum_snare_hard', 'drum_snare_soft', 'drum_roll',
+                        'drum_tom_hi_hard', 'drum_tom_lo_hard'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Electronic">
+                      {['elec_beep', 'elec_bell', 'elec_blip', 'elec_bong',
+                        'elec_chime', 'elec_cymbal', 'elec_flip', 'elec_ping',
+                        'elec_pop', 'elec_snare', 'elec_twang', 'elec_wood'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Guitar">
+                      {['guit_e_fifths', 'guit_e_slide', 'guit_em9', 'guit_harmonics'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Glitch">
+                      {['glitch_bass_g', 'glitch_perc1', 'glitch_perc2', 'glitch_perc3',
+                        'glitch_perc4', 'glitch_perc5', 'glitch_robot1', 'glitch_robot2'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+                <div className="sampler-detail-section">
+                  <span className="sampler-detail-label">Load from file</span>
+                  <button
+                    className="sampler-detail-load-btn"
+                    onClick={() => {
+                      if (sampleLoadTargetRef) sampleLoadTargetRef.current = selNode.id;
+                      sampleFileInputRef?.current?.click();
+                    }}
+                  >
+                    Choose audio file...
+                  </button>
+                </div>
+                {sampleData?.[selNode.id] && (
+                  <div className="sampler-detail-info">
+                    <div>Sample: {sampleData[selNode.id].name}</div>
+                    <div>Duration: {sampleData[selNode.id].duration.toFixed(2)}s</div>
+                    <div>Channels: {sampleData[selNode.id].channels} ({sampleData[selNode.id].channels === 2 ? 'stereo' : 'mono'})</div>
+                    <div>Region: {((selNode.params.start_pos ?? 0) * 100).toFixed(1)}% - {((selNode.params.end_pos ?? 1) * 100).toFixed(1)}%</div>
+                  </div>
+                )}
+                <div className="print-hint">
+                  Load a sample, then drag handles on the waveform to select a playback region.
+                  Use the trigger button or connect a bang/envelope to the trig port.
                 </div>
               </div>
             </div>

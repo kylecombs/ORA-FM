@@ -23,6 +23,7 @@ export function usePatchIO({
   setSelectedNodeId,
   setMidiActivity,
   setStatus,
+  handleLoadBuiltinSample,
 }) {
   const fileInputRef = useRef(null);
 
@@ -57,6 +58,7 @@ export function usePatchIO({
         if (node.midiChannel != null) entry.midiChannel = node.midiChannel;
         if (node.midiCcNumber != null) entry.midiCcNumber = node.midiCcNumber;
         if (node.midiDeviceId != null) entry.midiDeviceId = node.midiDeviceId;
+        if (node.sampleName != null) entry.sampleName = node.sampleName;
         return entry;
       }),
       connections: connections.map((c) => {
@@ -158,6 +160,7 @@ export function usePatchIO({
           if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
           if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
           if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
+          if (n.sampleName != null) restoredNodes[n.id].sampleName = n.sampleName;
         }
 
         // Restore connections
@@ -178,6 +181,15 @@ export function usePatchIO({
         setNodes(restoredNodes);
         setConnections(restoredConns);
         setStatus(`Loaded: ${patch.name || 'patch'}`);
+
+        // Re-load samples for sample_player nodes (built-in samples only)
+        if (handleLoadBuiltinSample) {
+          for (const n of Object.values(restoredNodes)) {
+            if (n.type === 'sample_player' && n.sampleName) {
+              handleLoadBuiltinSample(n.id, n.sampleName);
+            }
+          }
+        }
       } catch (err) {
         setStatus(`Error loading patch: ${err.message}`);
       }

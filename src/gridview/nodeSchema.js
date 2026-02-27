@@ -332,6 +332,24 @@ export const NODE_SCHEMA = {
       release: { label: 'rel',  min: 0,  max: 5,  step: 0.1,  val: 1 },
     },
   },
+  // ── Sample player ──────────────────────────────────────
+  sample_player: {
+    label: 'Sampler',
+    desc: 'sample player',
+    accent: '#c89a60',
+    synthDef: 'sample_player',
+    width: 280,
+    inputs: [],
+    outputs: ['out'],
+    modInputs: ['rate', 'amp'],
+    params: {
+      rate:      { label: 'rate', min: -4, max: 4, step: 0.01, val: 1 },
+      amp:       { label: 'amp',  min: 0,  max: 1, step: 0.01, val: 0.5 },
+      start_pos: { label: 'start', min: 0, max: 1, step: 0.001, val: 0, hidden: true },
+      end_pos:   { label: 'end',   min: 0, max: 1, step: 0.001, val: 1, hidden: true },
+      loop:      { label: 'loop',  min: 0, max: 1, step: 1, val: 1, hidden: true },
+    },
+  },
   // ── FX modules ─────────────────────────────────────────
   fx_reverb: {
     label: 'Reverb',
@@ -803,6 +821,12 @@ export const MODULE_CATEGORIES = [
     label: 'Oscillators',
     desc: 'basic waveforms',
     types: ['sine', 'sine_osc', 'buchla_osc', 'saw'],
+  },
+  {
+    id: 'samplers',
+    label: 'Samplers',
+    desc: 'sample playback',
+    types: ['sample_player'],
   },
   {
     id: 'instruments',
