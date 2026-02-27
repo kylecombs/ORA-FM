@@ -62,6 +62,25 @@ function freqToNoteName(hz) {
   return `${name}${octave}`;
 }
 
+// ── Frequency rate mode ranges ───────────────────────────
+const FREQ_RANGES = {
+  audio: { min: 20, max: 20000, step: 0.1, defaultVal: 440 },
+  lfo:   { min: 0.01, max: 20, step: 0.001, defaultVal: 1 },
+};
+
+function getFreqRange(node) {
+  const mode = node.freqMode || 'audio';
+  if (node.freqRangeMin != null && node.freqRangeMax != null) {
+    return { min: node.freqRangeMin, max: node.freqRangeMax, step: FREQ_RANGES[mode].step };
+  }
+  return FREQ_RANGES[mode];
+}
+
+function hasFreqParam(type) {
+  const schema = NODE_SCHEMA[type];
+  return schema && schema.params && 'freq' in schema.params;
+}
+
 // ── Node type definitions ─────────────────────────────────
 const NODE_SCHEMA = {
   sine: {
@@ -1195,6 +1214,10 @@ export default function GridView() {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const didDragRef = useRef(false);
 
+  // Inline param editing state: { nodeId, paramKey } or null
+  const [editingParam, setEditingParam] = useState(null);
+  const [editingParamValue, setEditingParamValue] = useState('');
+
   // Script runtime state
   const scriptRunnerRef = useRef(null);
   const [runningScripts, setRunningScripts] = useState(new Set());
@@ -1945,6 +1968,10 @@ export default function GridView() {
     if (type === 'scope') {
       node.scopeMode = 'modern'; // 'modern' (clean utility) or 'classic' (phosphor CRT)
     }
+    // Initialize freqMode for any module with a freq parameter
+    if (schema.params && 'freq' in schema.params) {
+      node.freqMode = 'audio'; // 'audio' (20–20kHz) or 'lfo' (0.01–20 Hz)
+    }
     setNodes((prev) => {
       const count = Object.keys(prev).length;
       const col = Math.max(0, count - 1) % 3;
@@ -2055,6 +2082,52 @@ export default function GridView() {
         engineRef.current?.setParam(nodeId, 'freq', sent);
       }
       return { ...prev, [nodeId]: updated };
+    });
+  }, []);
+
+  // ── Freq mode toggle (LFO / Audio) ─────────────────────
+  const handleFreqModeChange = useCallback((nodeId, mode) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      const range = FREQ_RANGES[mode];
+      const oldFreq = node.params.freq ?? 440;
+      // Clamp current freq to new range
+      const newFreq = Math.max(range.min, Math.min(range.max, oldFreq));
+      // If the value was out of range, snap to default
+      const freq = (oldFreq < range.min || oldFreq > range.max) ? range.defaultVal : newFreq;
+      engineRef.current?.setParam(nodeId, 'freq', node.quantize ? quantizeFreq(freq) : freq);
+      return {
+        ...prev,
+        [nodeId]: {
+          ...node,
+          freqMode: mode,
+          // Clear custom range when switching modes
+          freqRangeMin: undefined,
+          freqRangeMax: undefined,
+          params: { ...node.params, freq },
+        },
+      };
+    });
+  }, []);
+
+  // ── Freq custom range ──────────────────────────────────
+  const handleFreqRangeChange = useCallback((nodeId, field, value) => {
+    setNodes((prev) => {
+      const node = prev[nodeId];
+      const updated = { ...node, [field]: value };
+      // Clamp freq to new range
+      const range = getFreqRange(updated);
+      const freq = Math.max(range.min, Math.min(range.max, node.params.freq ?? 440));
+      if (freq !== node.params.freq) {
+        engineRef.current?.setParam(nodeId, 'freq', node.quantize ? quantizeFreq(freq) : freq);
+      }
+      return {
+        ...prev,
+        [nodeId]: {
+          ...updated,
+          params: { ...node.params, freq },
+        },
+      };
     });
   }, []);
 
@@ -3003,6 +3076,12 @@ export default function GridView() {
               if (def.hidden) return null;
               const isModulated = key in modulatedParams;
               const isAudioRateMod = audioRateModulatedParams.has(key);
+              // Dynamic range for freq params based on freqMode
+              const isFreq = key === 'freq' && node.freqMode;
+              const freqRange = isFreq ? getFreqRange(node) : null;
+              const pMin = isFreq ? freqRange.min : def.min;
+              const pMax = isFreq ? freqRange.max : def.max;
+              const pStep = isFreq ? freqRange.step : def.step;
               // For audio-rate mod, show base value; for control-rate mod, show modulated value
               const displayVal = isAudioRateMod
                 ? (node.params[key] ?? def.val)
@@ -3016,32 +3095,76 @@ export default function GridView() {
                   ? modulatedParams[key]
                   : (node.params[key] ?? def.val);
 
+              const isEditing = editingParam && editingParam.nodeId === node.id && editingParam.paramKey === key;
+
+              const formatVal = (v) => {
+                if (isAudioRateMod) return key === 'freq' ? 'FM' : key === 'amp' ? 'AM' : 'PM';
+                if (key === 'freq' && node.quantize) return freqToNoteName(v);
+                if (v >= 100) return Math.round(v);
+                return v.toFixed(pStep < 0.1 ? 2 : pStep < 1 ? 1 : 0);
+              };
+
               return (
                 <div className={`node-param${isModulated ? ' modulated' : ''}${isAudioRateMod ? ' audio-rate-mod' : ''}`} key={key}>
-                  <span className="param-label">{def.label}</span>
+                  <span className="param-label">
+                    {isFreq ? (node.freqMode === 'lfo' ? 'lfo' : def.label) : def.label}
+                  </span>
                   <input
                     type="range"
-                    min={def.min}
-                    max={def.max}
-                    step={def.step}
-                    value={sliderVal}
+                    min={pMin}
+                    max={pMax}
+                    step={pStep}
+                    value={Math.max(pMin, Math.min(pMax, sliderVal))}
                     disabled={isModulated && !isAudioRateMod}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
                       handleParamChange(node.id, key, v);
                     }}
                   />
-                  <span className="param-val">
-                    {isAudioRateMod
-                      ? (key === 'freq' ? 'FM' : key === 'amp' ? 'AM' : 'PM')
-                      : key === 'freq' && node.quantize
-                        ? freqToNoteName(displayVal)
-                        : displayVal >= 100
-                          ? Math.round(displayVal)
-                          : displayVal.toFixed(
-                              def.step < 0.1 ? 2 : def.step < 1 ? 1 : 0
-                            )}
-                  </span>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      className="param-val-input"
+                      autoFocus
+                      value={editingParamValue}
+                      onChange={(e) => setEditingParamValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const v = parseFloat(editingParamValue);
+                          if (!isNaN(v)) {
+                            const clamped = Math.max(pMin, Math.min(pMax, v));
+                            handleParamChange(node.id, key, clamped);
+                          }
+                          setEditingParam(null);
+                        } else if (e.key === 'Escape') {
+                          setEditingParam(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        const v = parseFloat(editingParamValue);
+                        if (!isNaN(v)) {
+                          const clamped = Math.max(pMin, Math.min(pMax, v));
+                          handleParamChange(node.id, key, clamped);
+                        }
+                        setEditingParam(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="param-val param-val-clickable"
+                      title="Click to type a value"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingParam({ nodeId: node.id, paramKey: key });
+                        setEditingParamValue(String(displayVal));
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      {formatVal(displayVal)}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -3385,28 +3508,122 @@ export default function GridView() {
                         </div>
                       </div>
                     </div>
-                  ) : selNode.type === 'sine_osc' ? (
+                  ) : hasFreqParam(selNode.type) ? (
                     <div className="details-body">
-                      <div className="sine-osc-options">
-                        <label className="sine-osc-quantize">
-                          <input
-                            type="checkbox"
-                            checked={selNode.quantize || false}
-                            onChange={(e) =>
-                              handleQuantizeToggle(selNode.id, e.target.checked)
-                            }
-                          />
-                          <span className="sine-osc-quantize-label">
-                            Quantize frequency to nearest note
-                          </span>
-                        </label>
-                        {selNode.quantize && (
-                          <div className="sine-osc-quantize-info">
-                            {freqToNoteName(selNode.params.freq ?? 440)}
-                            {' · '}
-                            {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
+                      <div className="freq-options">
+                        {/* Rate mode toggle: Audio / LFO */}
+                        <div className="freq-option">
+                          <span className="freq-label">Rate</span>
+                          <div className="freq-mode-toggle-group">
+                            <button
+                              className={`freq-mode-choice${(selNode.freqMode || 'audio') === 'audio' ? ' active' : ''}`}
+                              onClick={() => handleFreqModeChange(selNode.id, 'audio')}
+                            >
+                              Audio
+                            </button>
+                            <button
+                              className={`freq-mode-choice${(selNode.freqMode || 'audio') === 'lfo' ? ' active' : ''}`}
+                              onClick={() => handleFreqModeChange(selNode.id, 'lfo')}
+                            >
+                              LFO
+                            </button>
                           </div>
-                        )}
+                        </div>
+                        <div className="freq-mode-desc">
+                          {(selNode.freqMode || 'audio') === 'lfo'
+                            ? 'Low-frequency mode (0.01 – 20 Hz). Use for modulation and slow movement.'
+                            : 'Audible frequency range (20 Hz – 20 kHz). Use for pitched tones.'}
+                        </div>
+
+                        {/* Custom range override */}
+                        <div className="freq-range-section">
+                          <span className="freq-range-title">Frequency range</span>
+                          <div className="freq-range-inputs">
+                            <div className="freq-range-field">
+                              <label className="freq-range-field-label">Min</label>
+                              <input
+                                type="number"
+                                className="freq-range-input"
+                                value={selNode.freqRangeMin ?? getFreqRange(selNode).min}
+                                step={FREQ_RANGES[selNode.freqMode || 'audio'].step}
+                                min={0.001}
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value);
+                                  if (!isNaN(v) && v > 0) handleFreqRangeChange(selNode.id, 'freqRangeMin', v);
+                                }}
+                              />
+                              <span className="freq-range-unit">Hz</span>
+                            </div>
+                            <div className="freq-range-field">
+                              <label className="freq-range-field-label">Max</label>
+                              <input
+                                type="number"
+                                className="freq-range-input"
+                                value={selNode.freqRangeMax ?? getFreqRange(selNode).max}
+                                step={FREQ_RANGES[selNode.freqMode || 'audio'].step}
+                                min={0.001}
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value);
+                                  if (!isNaN(v) && v > 0) handleFreqRangeChange(selNode.id, 'freqRangeMax', v);
+                                }}
+                              />
+                              <span className="freq-range-unit">Hz</span>
+                            </div>
+                            {(selNode.freqRangeMin != null || selNode.freqRangeMax != null) && (
+                              <button
+                                className="freq-range-reset"
+                                onClick={() => setNodes((prev) => ({
+                                  ...prev,
+                                  [selNode.id]: {
+                                    ...prev[selNode.id],
+                                    freqRangeMin: undefined,
+                                    freqRangeMax: undefined,
+                                  },
+                                }))}
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Quantize (for oscillators) */}
+                        <div className="freq-quantize-section">
+                          <label className="freq-quantize">
+                            <input
+                              type="checkbox"
+                              checked={selNode.quantize || false}
+                              onChange={(e) =>
+                                handleQuantizeToggle(selNode.id, e.target.checked)
+                              }
+                            />
+                            <span className="freq-quantize-label">
+                              Quantize frequency to nearest note
+                            </span>
+                          </label>
+                          {selNode.quantize && (
+                            <div className="freq-quantize-info">
+                              {freqToNoteName(selNode.params.freq ?? 440)}
+                              {' · '}
+                              {quantizeFreq(selNode.params.freq ?? 440).toFixed(2)} Hz
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Current value display */}
+                        <div className="freq-current-value">
+                          <span className="freq-current-label">Current</span>
+                          <span className="freq-current-hz">
+                            {(selNode.params.freq ?? 440) < 100
+                              ? (selNode.params.freq ?? 440).toFixed(3)
+                              : Math.round(selNode.params.freq ?? 440)} Hz
+                          </span>
+                          {(selNode.freqMode || 'audio') === 'lfo' && (
+                            <span className="freq-current-period">
+                              {(1 / (selNode.params.freq || 1)).toFixed(2)}s period
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : selNode.type === 'print' ? (
