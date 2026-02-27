@@ -144,6 +144,9 @@ export default function NodeRenderer({
           title="clock/trigger input"
         >
           <span className="port-label port-label-in">clk</span>
+        </div>
+      )}
+
       {/* Sample player trigger input port */}
       {isSampler && (
         <div
