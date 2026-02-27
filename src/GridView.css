@@ -2391,3 +2391,182 @@
   color: var(--dim, #7a7570);
   line-height: 1.4;
 }
+
+/* ══════════════════════════════════════════════
+   SAMPLE PLAYER MODULE
+   ══════════════════════════════════════════════ */
+
+.sense-node.sampler {
+  width: 280px;
+}
+
+/* ── Waveform canvas ──────────────────────── */
+.sampler-body {
+  padding: 6px 10px 4px;
+}
+
+.sampler-waveform-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--border, #252320);
+}
+
+/* ── Controls row ─────────────────────────── */
+.sampler-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.sampler-trig-btn {
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  color: var(--accent);
+  width: 28px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 0.55rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.sampler-trig-btn:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--lift, #1a1917));
+}
+
+.sampler-trig-btn:active {
+  background: color-mix(in srgb, var(--accent) 30%, var(--lift, #1a1917));
+  transform: scale(0.95);
+}
+
+.sampler-loop-btn {
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  color: var(--dim, #7a7570);
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sampler-loop-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--ink, #d4cfc8);
+}
+
+.sampler-loop-btn.active {
+  background: color-mix(in srgb, var(--accent) 20%, var(--lift, #1a1917));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--accent);
+}
+
+.sampler-load-btn {
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  color: var(--dim, #7a7570);
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sampler-load-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--ink, #d4cfc8);
+}
+
+.sampler-info {
+  font-size: 0.45rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+
+/* ── Details panel for sample player ───────── */
+.sampler-details {
+  padding: 4px 0;
+}
+
+.sampler-detail-section {
+  margin-bottom: 10px;
+}
+
+.sampler-detail-label {
+  display: block;
+  font-size: 0.55rem;
+  color: var(--dim, #7a7570);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.sampler-sample-select {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  border-radius: 6px;
+  color: var(--ink, #d4cfc8);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  cursor: pointer;
+  outline: none;
+}
+
+.sampler-sample-select:focus {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.sampler-sample-select option {
+  background: var(--surface, #111010);
+  color: var(--ink, #d4cfc8);
+}
+
+.sampler-sample-select optgroup {
+  color: var(--dim, #7a7570);
+  font-style: normal;
+}
+
+.sampler-detail-load-btn {
+  background: var(--lift, #1a1917);
+  border: 1px solid var(--border, #252320);
+  color: var(--dim, #7a7570);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.55rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+  text-align: center;
+}
+
+.sampler-detail-load-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--ink, #d4cfc8);
+}
+
+.sampler-detail-info {
+  font-size: 0.55rem;
+  color: var(--dim, #7a7570);
+  line-height: 1.6;
+  padding: 6px 0;
+  border-top: 1px solid var(--border, #252320);
+  margin-top: 6px;
+}
