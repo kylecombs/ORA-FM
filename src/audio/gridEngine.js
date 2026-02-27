@@ -61,6 +61,8 @@ const FX_DEFS = [
   'resonz',
   'comb',
   'multiply',
+  'ora_gain',
+  'ora_attenuator',
   'print',
   'ora_scope',
 ];

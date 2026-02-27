@@ -663,6 +663,30 @@ const NODE_SCHEMA = {
       gain: { label: 'gain', min: 0, max: 5000, step: 1, val: 100 },
     },
   },
+  gain: {
+    label: 'Gain',
+    desc: 'amplifier',
+    accent: '#a8b870',
+    synthDef: 'ora_gain',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      amp: { label: 'amp', min: 0, max: 4, step: 0.01, val: 1.0 },
+    },
+  },
+  attenuator: {
+    label: 'Attenuator',
+    desc: 'signal reducer',
+    accent: '#8a8a9a',
+    synthDef: 'ora_attenuator',
+    category: 'fx',
+    inputs: ['in'],
+    outputs: ['out'],
+    params: {
+      level: { label: 'level', min: 0, max: 1, step: 0.01, val: 1.0 },
+    },
+  },
   print: {
     label: 'Print',
     desc: 'debug logger',
@@ -795,7 +819,7 @@ const MODULE_CATEGORIES = [
     id: 'utility',
     label: 'Utility',
     desc: 'signal tools',
-    types: ['multiply', 'print', 'scope'],
+    types: ['gain', 'attenuator', 'multiply', 'print', 'scope'],
   },
   {
     id: 'scripting',
