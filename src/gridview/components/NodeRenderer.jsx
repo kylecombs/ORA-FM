@@ -3,6 +3,7 @@ import { HEADER_H, PORT_SECTION_Y, PORT_SPACING, PARAM_START_Y, PARAM_ROW_H } fr
 import { getNodeWidth, getNodeOutputs, freqToNoteName } from '../utils';
 import ScopeCanvas from '../ScopeCanvas';
 import BreakpointEditor from '../../BreakpointEditor';
+import WaveformDisplay from './WaveformDisplay';
 
 export default function NodeRenderer({
   node,
@@ -32,6 +33,14 @@ export default function NodeRenderer({
   getEnvelopeProgress,
   removeNode,
   setSelectedNodeId,
+  // Sample player props
+  sampleData,
+  samplePlayheads,
+  sampleFileInputRef,
+  sampleLoadTargetRef,
+  handleSampleRegionChange,
+  handleSampleTrigger,
+  handleSampleLoopToggle,
 }) {
   const schema = NODE_SCHEMA[node.type];
   if (!schema) return null;
@@ -43,6 +52,7 @@ export default function NodeRenderer({
   const isEnvelope = node.type === 'envelope';
   const isBang = node.type === 'bang';
   const isMidiIn = node.type === 'midi_in';
+  const isSampler = node.type === 'sample_player';
   const nodeWidth = getNodeWidth(node);
 
   // Check if this module has any modulation output connections
@@ -74,7 +84,7 @@ export default function NodeRenderer({
     <div
       key={node.id}
       data-node-id={node.id}
-      className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${node.type === 'scope' ? ' scope scope-classic' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
+      className={`sense-node${isLive ? ' live' : ''}${isAudioOut ? ' audio-out' : ''}${isFx ? ' fx' : ''}${isControl && !isEnvelope && !isBang && !isMidiIn ? ' control' : ''}${isScript ? ' script' : ''}${isEnvelope ? ' envelope' : ''}${isBang ? ' bang' : ''}${isMidiIn ? ' midi-in' : ''}${isSampler ? ' sampler' : ''}${node.type === 'scope' ? ' scope scope-classic' : ''}${hasModOutput ? ' live' : ''}${selectedNodeId === node.id ? ' selected' : ''}${runningScripts.has(node.id) || runningEnvelopes.has(node.id) ? ' running' : ''}${isMidiIn && midiListenersRef.current.has(node.id) ? ' listening' : ''}`}
       style={{
         left: node.x,
         top: node.y,
@@ -116,6 +126,18 @@ export default function NodeRenderer({
         <div
           className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
           style={{ top: HEADER_H + 60 - 4 }}
+          onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
+          title="trigger input"
+        >
+          <span className="port-label port-label-in">trig</span>
+        </div>
+      )}
+
+      {/* Sample player trigger input port */}
+      {isSampler && (
+        <div
+          className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'trig' in modulatedParams ? ' modulated' : ''}`}
+          style={{ top: HEADER_H + 40 + 80 / 2 - 4 }}
           onClick={(e) => handleParamPortClick(e, node.id, 'trig')}
           title="trigger input"
         >
@@ -266,6 +288,85 @@ export default function NodeRenderer({
           )}
         </div>
       )}
+
+      {/* Sample player body */}
+      {isSampler && (() => {
+        const sd = sampleData?.[node.id];
+        const startP = node.params.start_pos ?? 0;
+        const endP = node.params.end_pos ?? 1;
+        const loopOn = (node.params.loop ?? 1) > 0.5;
+
+        // Compute playhead position from JS-side timing
+        let phPos = null;
+        const ph = samplePlayheads?.[node.id];
+        if (ph && sd) {
+          const elapsed = (performance.now() - ph.trigTime) / 1000;
+          const regionDur = (ph.endPos - ph.startPos) * ph.duration / Math.abs(ph.rate || 1);
+          if (regionDur > 0) {
+            if (ph.loop) {
+              const progress = (elapsed % regionDur) / regionDur;
+              phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
+            } else if (elapsed < regionDur) {
+              const progress = elapsed / regionDur;
+              phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
+            }
+          }
+        }
+
+        return (
+          <div className="sampler-body">
+            <WaveformDisplay
+              audioData={sd?.audioData ?? null}
+              startPos={startP}
+              endPos={endP}
+              onRegionChange={(s, e) => handleSampleRegionChange?.(node.id, s, e)}
+              accentColor={schema.accent}
+              width={(schema.width || 280) - 22}
+              height={80}
+              playheadPos={phPos}
+              sampleName={sd?.name ?? null}
+            />
+            <div className="sampler-controls">
+              <button
+                className="sampler-trig-btn"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleSampleTrigger?.(node.id);
+                }}
+                title="Trigger playback"
+              >
+                &#9654;
+              </button>
+              <button
+                className={`sampler-loop-btn${loopOn ? ' active' : ''}`}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleSampleLoopToggle?.(node.id);
+                }}
+                title={loopOn ? 'Loop: ON' : 'Loop: OFF'}
+              >
+                loop
+              </button>
+              <button
+                className="sampler-load-btn"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  if (sampleLoadTargetRef) sampleLoadTargetRef.current = node.id;
+                  sampleFileInputRef?.current?.click();
+                }}
+                title="Load audio file"
+              >
+                load
+              </button>
+              {sd && (
+                <span className="sampler-info">
+                  {sd.channels === 2 ? 'st' : 'mo'} · {sd.duration.toFixed(1)}s
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Parameters (skip hidden params, skip for envelope) */}
       {!isEnvelope && !isBang && Object.keys(schema.params).length > 0 && (

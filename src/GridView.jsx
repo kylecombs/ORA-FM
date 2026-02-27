@@ -8,6 +8,7 @@ import { useMidi } from './gridview/hooks/useMidi';
 import { useNodeDrag } from './gridview/hooks/useNodeDrag';
 import { useRecording } from './gridview/hooks/useRecording';
 import { usePatchIO } from './gridview/hooks/usePatchIO';
+import { useSamplePlayer } from './gridview/hooks/useSamplePlayer';
 import Toolbar from './gridview/components/Toolbar';
 import InstrumentPanel from './gridview/components/InstrumentPanel';
 import ModuleDetailsPanel from './gridview/components/ModuleDetailsPanel';
@@ -121,6 +122,24 @@ export default function GridView() {
     setStatus,
   });
 
+  // ── Sample player hook ────────────────────────────────
+  const {
+    sampleData,
+    samplePlayheads,
+    sampleFileInputRef,
+    sampleLoadTargetRef,
+    handleSampleFileSelect,
+    handleLoadBuiltinSample,
+    handleSampleRegionChange,
+    handleSampleTrigger,
+    handleSampleLoopToggle,
+    cleanupSamplePlayer,
+  } = useSamplePlayer({
+    engineRef,
+    setNodes,
+    setStatus,
+  });
+
   // ── Patch I/O hook ─────────────────────────────────────
   const { fileInputRef, handleSavePatch, handleLoadPatch, handleFileSelect } = usePatchIO({
     nodes,
@@ -140,6 +159,7 @@ export default function GridView() {
     setSelectedNodeId,
     setMidiActivity,
     setStatus,
+    handleLoadBuiltinSample,
   });
 
   // ── Param change ──────────────────────────────────────
@@ -373,7 +393,7 @@ export default function GridView() {
       if (conn.toParam !== 'trig') continue;
 
       const targetNode = nodes[conn.toNodeId];
-      if (!targetNode || targetNode.type !== 'envelope') continue;
+      if (!targetNode || (targetNode.type !== 'envelope' && targetNode.type !== 'sample_player')) continue;
 
       const sourceNode = nodes[conn.fromNodeId];
       if (!sourceNode) continue;
@@ -387,34 +407,39 @@ export default function GridView() {
       const prevValue = prev[conn.toNodeId] ?? 0;
 
       if (value >= 0.5 && prevValue < 0.5) {
-        const runner = envelopeRunnerRef.current;
-        if (runner) {
-          const envId = conn.toNodeId;
-          runner.trigger(
-            envId,
-            targetNode.breakpoints,
-            targetNode.curves,
-            targetNode.duration,
-            targetNode.loop
-          );
-          setRunningEnvelopes((s) => new Set(s).add(envId));
+        if (targetNode.type === 'envelope') {
+          const runner = envelopeRunnerRef.current;
+          if (runner) {
+            const envId = conn.toNodeId;
+            runner.trigger(
+              envId,
+              targetNode.breakpoints,
+              targetNode.curves,
+              targetNode.duration,
+              targetNode.loop
+            );
+            setRunningEnvelopes((s) => new Set(s).add(envId));
 
-          const check = setInterval(() => {
-            if (!envelopeRunnerRef.current?.isRunning(envId)) {
-              clearInterval(check);
-              setRunningEnvelopes((s) => {
-                const next = new Set(s);
-                next.delete(envId);
-                return next;
-              });
-            }
-          }, 100);
+            const check = setInterval(() => {
+              if (!envelopeRunnerRef.current?.isRunning(envId)) {
+                clearInterval(check);
+                setRunningEnvelopes((s) => {
+                  const next = new Set(s);
+                  next.delete(envId);
+                  return next;
+                });
+              }
+            }, 100);
+          }
+        } else if (targetNode.type === 'sample_player') {
+          // Trigger sample playback
+          handleSampleTrigger(conn.toNodeId);
         }
       }
 
       prev[conn.toNodeId] = value;
     }
-  }, [nodes, connections]);
+  }, [nodes, connections, handleSampleTrigger]);
 
   // ── Param port click (modulation connect/disconnect) ──
   const handleParamPortClick = useCallback(
@@ -662,6 +687,13 @@ export default function GridView() {
               getEnvelopeProgress={getEnvelopeProgress}
               removeNode={removeNode}
               setSelectedNodeId={setSelectedNodeId}
+              sampleData={sampleData}
+              samplePlayheads={samplePlayheads}
+              sampleFileInputRef={sampleFileInputRef}
+              sampleLoadTargetRef={sampleLoadTargetRef}
+              handleSampleRegionChange={handleSampleRegionChange}
+              handleSampleTrigger={handleSampleTrigger}
+              handleSampleLoopToggle={handleSampleLoopToggle}
             />
           ))}
 
@@ -701,6 +733,10 @@ export default function GridView() {
           handleQuantizeToggle={handleQuantizeToggle}
           handlePrintPrefix={handlePrintPrefix}
           handlePrintColor={handlePrintColor}
+          sampleData={sampleData}
+          sampleFileInputRef={sampleFileInputRef}
+          sampleLoadTargetRef={sampleLoadTargetRef}
+          handleLoadBuiltinSample={handleLoadBuiltinSample}
         />
 
         {/* Print Console Panel */}
@@ -710,6 +746,15 @@ export default function GridView() {
           printLogs={printLogs}
           clearPrintLogs={clearPrintLogs}
           printConsoleRef={printConsoleRef}
+        />
+
+        {/* Hidden file input for sample loading */}
+        <input
+          ref={sampleFileInputRef}
+          type="file"
+          accept="audio/*,.flac,.wav,.ogg,.mp3,.aif,.aiff"
+          style={{ display: 'none' }}
+          onChange={handleSampleFileSelect}
         />
 
         {/* Status bar */}

@@ -14,6 +14,7 @@
 // ════════════════════════════════════════════════════════════
 
 import { SuperSonic } from 'supersonic-scsynth';
+import { buildSamplePlayerDef } from './buildSamplePlayerDef';
 
 const SOURCE_DEFS = [
   'sine',
@@ -86,6 +87,10 @@ export class GridEngine {
     // Control bus allocator (buses 0–4095 available, separate from audio buses)
     this._nextControlBus = 0;
     this._controlBuses = new Map(); // allocationKey → busIndex
+
+    // Buffer allocator for sample players
+    this._nextBuffer = 100; // Start high to avoid conflicts
+    this._buffers = new Map(); // graphNodeId → bufNum
   }
 
   async boot() {
@@ -161,6 +166,11 @@ export class GridEngine {
       this.onStatus?.(`Loading ${def.replace('sonic-pi-', '')}…`);
       await this.sonic.loadSynthDef(def);
     }
+
+    // Load the runtime-built sample_player SynthDef via /d_recv
+    this.onStatus?.('Loading sample_player...');
+    const samplePlayerDef = buildSamplePlayerDef();
+    this.sonic.send('/d_recv', samplePlayerDef);
 
     // Start the master limiter (always running, clips bus 0 output)
     this.sonic.send('/s_new', 'master_limiter', 2999, 0, 3);
@@ -433,5 +443,66 @@ export class GridEngine {
   // Get the buffer number for a scope module
   getScopeBuffer(graphId) {
     return this._scopeGraphToBuf.get(graphId) ?? null;
+  }
+
+  // ── Buffer management (for sample player) ─────────────
+
+  // Allocate a buffer slot for a graph node
+  allocBuffer(graphId) {
+    if (this._buffers.has(graphId)) return this._buffers.get(graphId);
+    const buf = this._nextBuffer++;
+    this._buffers.set(graphId, buf);
+    return buf;
+  }
+
+  // Get the buffer number for a graph node (or null)
+  getBuffer(graphId) {
+    return this._buffers.get(graphId) ?? null;
+  }
+
+  // Load audio data into a buffer via /b_allocFile (SuperSonic extension)
+  // audioData should be a Uint8Array of the raw audio file bytes (FLAC, WAV, OGG, MP3)
+  loadSampleBuffer(graphId, audioData) {
+    if (!this.booted) return null;
+    const bufNum = this.allocBuffer(graphId);
+    try {
+      this.sonic.send('/b_allocFile', bufNum, audioData);
+    } catch (e) {
+      console.error('[GridEngine] Failed to load sample buffer:', e);
+    }
+    return bufNum;
+  }
+
+  // Load a built-in sample by name (fetches from /supersonic/samples/)
+  async loadBuiltinSample(graphId, sampleName) {
+    if (!this.booted) return null;
+    const bufNum = this.allocBuffer(graphId);
+    try {
+      // Fetch the sample file and send as raw bytes
+      const resp = await fetch(`/supersonic/samples/${sampleName}.flac`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = new Uint8Array(await resp.arrayBuffer());
+      this.sonic.send('/b_allocFile', bufNum, data);
+    } catch (e) {
+      console.error(`[GridEngine] Failed to load sample "${sampleName}":`, e);
+    }
+    return bufNum;
+  }
+
+  // Free a buffer
+  freeBuffer(graphId) {
+    const buf = this._buffers.get(graphId);
+    if (buf != null) {
+      try { this.sonic.send('/b_free', buf); } catch { /* ignore */ }
+      this._buffers.delete(graphId);
+    }
+  }
+
+  // Send a trigger to a running synth's t_trig parameter
+  triggerSample(graphId) {
+    const id = this._active.get(graphId);
+    if (id != null) {
+      try { this.sonic.send('/n_set', id, 't_trig', 1); } catch { /* ignore */ }
+    }
   }
 }
