@@ -86,6 +86,98 @@ export function usePatchIO({
     setStatus('Patch saved');
   }, [nodes, connections]);
 
+  // ── Core patch restore logic (reusable) ─────────────────
+  const applyPatchData = useCallback((patch) => {
+    if (!patch.nodes || !patch.connections) {
+      setStatus('Error: Invalid patch — missing nodes or connections');
+      return;
+    }
+
+    // Stop all running audio, scripts, envelopes
+    const engine = engineRef.current;
+    if (engine) {
+      for (const id of Object.keys(nodes)) {
+        engine.stop(Number(id));
+      }
+    }
+    scriptRunnerRef.current?.stopAll?.();
+    envelopeRunnerRef.current?.stopAll?.();
+    pulserRunnerRef?.current?.stopAll?.();
+    sequencerRunnerRef?.current?.stopAll?.();
+    for (const listener of midiListenersRef.current.values()) {
+      listener.stop();
+    }
+    midiListenersRef.current.clear();
+    setRunningScripts(new Set());
+    setRunningEnvelopes(new Set());
+    setRunningPulsers(new Set());
+    setRunningSequencers(new Set());
+    setPrintLogs([]);
+    setSelectedNodeId(null);
+    setMidiActivity({});
+    scopeBuffersRef.current.clear();
+
+    // Restore nodes
+    const restoredNodes = {};
+    for (const n of patch.nodes) {
+      if (!NODE_SCHEMA[n.type]) {
+        setStatus(`Warning: Unknown node type "${n.type}" — skipped`);
+        continue;
+      }
+      restoredNodes[n.id] = {
+        id: n.id,
+        type: n.type,
+        x: n.x ?? 0,
+        y: n.y ?? 0,
+        params: { ...n.params },
+      };
+      if (n.code != null) restoredNodes[n.id].code = n.code;
+      if (n.numOutputs != null) restoredNodes[n.id].numOutputs = n.numOutputs;
+      if (n.scriptWidth != null) restoredNodes[n.id].scriptWidth = n.scriptWidth;
+      if (n.quantize) restoredNodes[n.id].quantize = true;
+      if (n.breakpoints) restoredNodes[n.id].breakpoints = n.breakpoints;
+      if (n.curves) restoredNodes[n.id].curves = n.curves;
+      if (n.duration != null) restoredNodes[n.id].duration = n.duration;
+      if (n.loop) restoredNodes[n.id].loop = true;
+      if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
+      if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
+      if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
+      if (n.midiMode != null) restoredNodes[n.id].midiMode = n.midiMode;
+      if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
+      if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
+      if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
+      if (n.sampleName != null) restoredNodes[n.id].sampleName = n.sampleName;
+    }
+
+    // Restore connections
+    const restoredConns = patch.connections.map((c) => ({
+      id: c.id,
+      fromNodeId: c.from,
+      fromPortIndex: c.fromPort,
+      toNodeId: c.to,
+      toPortIndex: c.toPort,
+      toParam: c.toParam || null,
+      isAudioRate: c.isAudioRate || false,
+    }));
+
+    // Restore ID counters
+    if (patch.nextId) nextId.current = patch.nextId;
+    if (patch.connId) connId.current = patch.connId;
+
+    setNodes(restoredNodes);
+    setConnections(restoredConns);
+    setStatus(`Loaded: ${patch.name || 'patch'}`);
+
+    // Re-load samples for sample_player nodes (built-in samples only)
+    if (handleLoadBuiltinSample) {
+      for (const n of Object.values(restoredNodes)) {
+        if (n.type === 'sample_player' && n.sampleName) {
+          handleLoadBuiltinSample(n.id, n.sampleName);
+        }
+      }
+    }
+  }, [nodes]);
+
   // ── Load patch from JSON file ───────────────────────────
   const handleLoadPatch = useCallback(() => {
     fileInputRef.current?.click();
@@ -99,97 +191,7 @@ export function usePatchIO({
     reader.onload = (ev) => {
       try {
         const patch = JSON.parse(ev.target.result);
-
-        // Validate basic structure
-        if (!patch.nodes || !patch.connections) {
-          setStatus('Error: Invalid patch file — missing nodes or connections');
-          return;
-        }
-
-        // Stop all running audio, scripts, envelopes
-        const engine = engineRef.current;
-        if (engine) {
-          for (const id of Object.keys(nodes)) {
-            engine.stop(Number(id));
-          }
-        }
-        scriptRunnerRef.current?.stopAll?.();
-        envelopeRunnerRef.current?.stopAll?.();
-        pulserRunnerRef?.current?.stopAll?.();
-        sequencerRunnerRef?.current?.stopAll?.();
-        // Stop all MIDI listeners
-        for (const listener of midiListenersRef.current.values()) {
-          listener.stop();
-        }
-        midiListenersRef.current.clear();
-        setRunningScripts(new Set());
-        setRunningEnvelopes(new Set());
-        setRunningPulsers(new Set());
-        setRunningSequencers(new Set());
-        setPrintLogs([]);
-        setSelectedNodeId(null);
-        setMidiActivity({});
-        scopeBuffersRef.current.clear();
-
-        // Restore nodes
-        const restoredNodes = {};
-        for (const n of patch.nodes) {
-          if (!NODE_SCHEMA[n.type]) {
-            setStatus(`Warning: Unknown node type "${n.type}" — skipped`);
-            continue;
-          }
-          restoredNodes[n.id] = {
-            id: n.id,
-            type: n.type,
-            x: n.x ?? 0,
-            y: n.y ?? 0,
-            params: { ...n.params },
-          };
-          if (n.code != null) restoredNodes[n.id].code = n.code;
-          if (n.numOutputs != null) restoredNodes[n.id].numOutputs = n.numOutputs;
-          if (n.scriptWidth != null) restoredNodes[n.id].scriptWidth = n.scriptWidth;
-          if (n.quantize) restoredNodes[n.id].quantize = true;
-          if (n.breakpoints) restoredNodes[n.id].breakpoints = n.breakpoints;
-          if (n.curves) restoredNodes[n.id].curves = n.curves;
-          if (n.duration != null) restoredNodes[n.id].duration = n.duration;
-          if (n.loop) restoredNodes[n.id].loop = true;
-          if (n.printPrefix != null) restoredNodes[n.id].printPrefix = n.printPrefix;
-          if (n.printColor != null) restoredNodes[n.id].printColor = n.printColor;
-          if (n.bangSize != null) restoredNodes[n.id].bangSize = n.bangSize;
-          if (n.midiMode != null) restoredNodes[n.id].midiMode = n.midiMode;
-          if (n.midiChannel != null) restoredNodes[n.id].midiChannel = n.midiChannel;
-          if (n.midiCcNumber != null) restoredNodes[n.id].midiCcNumber = n.midiCcNumber;
-          if (n.midiDeviceId != null) restoredNodes[n.id].midiDeviceId = n.midiDeviceId;
-          if (n.sampleName != null) restoredNodes[n.id].sampleName = n.sampleName;
-        }
-
-        // Restore connections
-        const restoredConns = patch.connections.map((c) => ({
-          id: c.id,
-          fromNodeId: c.from,
-          fromPortIndex: c.fromPort,
-          toNodeId: c.to,
-          toPortIndex: c.toPort,
-          toParam: c.toParam || null,
-          isAudioRate: c.isAudioRate || false,
-        }));
-
-        // Restore ID counters
-        if (patch.nextId) nextId.current = patch.nextId;
-        if (patch.connId) connId.current = patch.connId;
-
-        setNodes(restoredNodes);
-        setConnections(restoredConns);
-        setStatus(`Loaded: ${patch.name || 'patch'}`);
-
-        // Re-load samples for sample_player nodes (built-in samples only)
-        if (handleLoadBuiltinSample) {
-          for (const n of Object.values(restoredNodes)) {
-            if (n.type === 'sample_player' && n.sampleName) {
-              handleLoadBuiltinSample(n.id, n.sampleName);
-            }
-          }
-        }
+        applyPatchData(patch);
       } catch (err) {
         setStatus(`Error loading patch: ${err.message}`);
       }
@@ -198,7 +200,7 @@ export function usePatchIO({
 
     // Reset input so the same file can be loaded again
     e.target.value = '';
-  }, [nodes]);
+  }, [applyPatchData]);
 
-  return { fileInputRef, handleSavePatch, handleLoadPatch, handleFileSelect };
+  return { fileInputRef, handleSavePatch, handleLoadPatch, handleFileSelect, applyPatchData };
 }

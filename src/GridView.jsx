@@ -11,10 +11,12 @@ import { usePatchIO } from './gridview/hooks/usePatchIO';
 import { usePulser } from './gridview/hooks/usePulser';
 import { useSequencer } from './gridview/hooks/useSequencer';
 import { useSamplePlayer } from './gridview/hooks/useSamplePlayer';
+import { useDaphne } from './gridview/hooks/useDaphne';
 import Toolbar from './gridview/components/Toolbar';
 import InstrumentPanel from './gridview/components/InstrumentPanel';
 import ModuleDetailsPanel from './gridview/components/ModuleDetailsPanel';
 import PrintConsole from './gridview/components/PrintConsole';
+import DaphnePanel from './gridview/components/DaphnePanel';
 import NodeRenderer from './gridview/components/NodeRenderer';
 import './GridView.css';
 
@@ -171,7 +173,7 @@ export default function GridView() {
   });
 
   // ── Patch I/O hook ─────────────────────────────────────
-  const { fileInputRef, handleSavePatch, handleLoadPatch, handleFileSelect } = usePatchIO({
+  const { fileInputRef, handleSavePatch, handleLoadPatch, handleFileSelect, applyPatchData } = usePatchIO({
     nodes,
     connections,
     nextId,
@@ -195,6 +197,9 @@ export default function GridView() {
     setStatus,
     handleLoadBuiltinSample,
   });
+
+  // ── Daphne AI assistant hook ──────────────────────────
+  const daphne = useDaphne({ applyPatchData });
 
   // ── Param change ──────────────────────────────────────
   const handleParamChange = useCallback((nodeId, param, value) => {
@@ -668,12 +673,14 @@ export default function GridView() {
           booting={booting}
           panelOpen={panelOpen}
           consoleOpen={consoleOpen}
+          daphneOpen={daphne.daphneOpen}
           recording={recording}
           recordingTime={recordingTime}
           fileInputRef={fileInputRef}
           handleBoot={handleBoot}
           setPanelOpen={setPanelOpen}
           setConsoleOpen={setConsoleOpen}
+          setDaphneOpen={daphne.setDaphneOpen}
           handleSavePatch={handleSavePatch}
           handleLoadPatch={handleLoadPatch}
           handleFileSelect={handleFileSelect}
@@ -773,6 +780,23 @@ export default function GridView() {
           sampleFileInputRef={sampleFileInputRef}
           sampleLoadTargetRef={sampleLoadTargetRef}
           handleLoadBuiltinSample={handleLoadBuiltinSample}
+        />
+
+        {/* Daphne AI Panel */}
+        <DaphnePanel
+          isOpen={daphne.daphneOpen}
+          onClose={() => daphne.setDaphneOpen(false)}
+          messages={daphne.messages}
+          input={daphne.input}
+          setInput={daphne.setInput}
+          loading={daphne.loading}
+          error={daphne.error}
+          messagesEndRef={daphne.messagesEndRef}
+          inputRef={daphne.inputRef}
+          sendMessage={daphne.sendMessage}
+          handleKeyDown={daphne.handleKeyDown}
+          handleLoadPatch={daphne.handleLoadPatch}
+          clearChat={daphne.clearChat}
         />
 
         {/* Print Console Panel */}
