@@ -308,6 +308,16 @@ export class GridEngine {
     }
   }
 
+  // Expose the AudioContext (for recording, analysis, etc.)
+  getAudioContext() {
+    return this.sonic?.audioContext ?? null;
+  }
+
+  // Expose the SuperSonic output AudioNode (for routing to MediaStreamDestination)
+  getOutputNode() {
+    return this.sonic?.node ?? null;
+  }
+
   isPlaying(graphId) {
     return this._active.has(graphId);
   }

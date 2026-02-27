@@ -1488,6 +1488,14 @@ export default function GridView() {
   const [midiDevices, setMidiDevices] = useState([]); // available MIDI input devices
   const [midiActivity, setMidiActivity] = useState({}); // nodeId → last activity timestamp
 
+  // Recording state
+  const [recording, setRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0); // seconds
+  const recorderRef = useRef(null); // MediaRecorder instance
+  const recChunksRef = useRef([]); // recorded data chunks
+  const recTimerRef = useRef(null); // interval for elapsed time display
+  const recStreamDestRef = useRef(null); // MediaStreamDestination node (reused)
+
   // Scope (oscilloscope) state — ring buffer per scope node
     // Scope (oscilloscope) state — full waveform snapshot per scope node
   const scopeBuffersRef = useRef(new Map()); // nodeId → Float32Array (latest buffer snapshot)
@@ -2663,6 +2671,80 @@ export default function GridView() {
     e.target.value = '';
   }, [nodes]);
 
+  // ── Audio recording ───────────────────────────────────────
+  const handleToggleRecording = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    if (recording) {
+      // ── Stop recording ──
+      recorderRef.current?.stop();
+      clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+      setRecording(false);
+      setRecordingTime(0);
+      return;
+    }
+
+    // ── Start recording ──
+    const ctx = engine.getAudioContext();
+    const outputNode = engine.getOutputNode();
+    if (!ctx || !outputNode) {
+      setStatus('Cannot record — audio engine not ready');
+      return;
+    }
+
+    // Create (or reuse) a MediaStreamDestination
+    if (!recStreamDestRef.current) {
+      recStreamDestRef.current = ctx.createMediaStreamDestination();
+      outputNode.connect(recStreamDestRef.current);
+    }
+
+    recChunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+
+    const recorder = new MediaRecorder(recStreamDestRef.current.stream, { mimeType });
+    recorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recChunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(recChunksRef.current, { type: mimeType });
+      const ext = mimeType.includes('webm') ? 'webm' : 'ogg';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ora-recording-${ts}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus('Recording saved');
+    };
+
+    recorder.start(250); // collect chunks every 250ms
+    setRecording(true);
+    setRecordingTime(0);
+    setStatus('Recording…');
+
+    // Elapsed-time timer (ticks every second)
+    const t0 = Date.now();
+    recTimerRef.current = setInterval(() => {
+      setRecordingTime(Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+  }, [recording]);
+
+  // Clean up recording on unmount
+  useEffect(() => {
+    return () => {
+      recorderRef.current?.stop();
+      clearInterval(recTimerRef.current);
+    };
+  }, []);
+
   // ── External trigger detection (rising-edge on modulated trig param) ──
   const prevTrigVals = useRef({}); // nodeId → previous trigger source value
 
@@ -3379,6 +3461,19 @@ export default function GridView() {
             title="Load patch from JSON file"
           >
             Load
+          </button>
+
+          <div className="toolbar-divider" />
+
+          <button
+            className={`toolbar-btn rec-btn${recording ? ' recording' : ''}`}
+            onClick={handleToggleRecording}
+            disabled={!booted}
+            title={recording ? 'Stop recording and save' : 'Record audio output'}
+          >
+            {recording
+              ? `Stop ${Math.floor(recordingTime / 60)}:${String(recordingTime % 60).padStart(2, '0')}`
+              : 'Rec'}
           </button>
 
           <input
