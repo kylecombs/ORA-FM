@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AmbientEngine } from './audio/engine';
+import { useTheme } from './ThemeProvider';
 import './App.css';
 
 export default function App() {
@@ -196,6 +197,8 @@ export default function App() {
     return cls;
   }, [statusActive, statusError]);
 
+  const { theme, toggleTheme } = useTheme();
+
   // ── Render ─────────────────────────────────────────────
   return (
     <>
@@ -340,9 +343,18 @@ export default function App() {
         </div>
       </main>
 
-      {/* Debug panel */}
-      <div className="debug-toggle" onClick={() => setDebugOpen((v) => !v)}>
-        {debugOpen ? '▾ Hide Debug' : '▸ Show Debug'}
+      {/* Theme + Debug toggles */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem' }}>
+        <div
+          className="debug-toggle"
+          onClick={toggleTheme}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme === 'dark' ? '☀ Light' : '☽ Dark'}
+        </div>
+        <div className="debug-toggle" onClick={() => setDebugOpen((v) => !v)}>
+          {debugOpen ? '▾ Hide Debug' : '▸ Show Debug'}
+        </div>
       </div>
       {debugOpen && (
         <div className="debug-panel">

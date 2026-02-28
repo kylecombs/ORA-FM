@@ -1,0 +1,80 @@
+.ora-btn {
+  font-family: var(--ora-font-mono);
+  border: 1px solid var(--ora-border);
+  border-radius: var(--ora-radius-sm);
+  cursor: pointer;
+  transition: all var(--ora-transition-fast);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ora-space-xs);
+  line-height: 1;
+}
+
+/* Sizes */
+.ora-btn--sm {
+  font-size: var(--ora-text-xs);
+  padding: var(--ora-space-xs) var(--ora-space-sm);
+}
+.ora-btn--md {
+  font-size: var(--ora-text-sm);
+  padding: var(--ora-space-sm) var(--ora-space-md);
+}
+.ora-btn--lg {
+  font-size: var(--ora-text-md);
+  padding: var(--ora-space-md) var(--ora-space-lg);
+}
+
+/* Default variant */
+.ora-btn--default {
+  background: var(--ora-lift);
+  color: var(--ora-ink);
+}
+.ora-btn--default:hover:not(:disabled) {
+  background: var(--ora-border);
+}
+
+/* Primary variant */
+.ora-btn--primary {
+  background: var(--ora-gold);
+  color: var(--ora-deep);
+  border-color: var(--ora-gold);
+}
+.ora-btn--primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* Danger variant */
+.ora-btn--danger {
+  background: transparent;
+  color: var(--ora-rose);
+  border-color: var(--ora-rose);
+}
+.ora-btn--danger:hover:not(:disabled) {
+  background: var(--ora-rose);
+  color: var(--ora-deep);
+}
+
+/* Ghost variant */
+.ora-btn--ghost {
+  background: transparent;
+  color: var(--ora-dim);
+  border-color: transparent;
+}
+.ora-btn--ghost:hover:not(:disabled) {
+  color: var(--ora-ink);
+  background: var(--ora-glow);
+}
+
+/* Active state */
+.ora-btn--active {
+  color: var(--ora-gold);
+  border-color: var(--ora-gold);
+  background: var(--ora-glow);
+}
+
+/* Disabled */
+.ora-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

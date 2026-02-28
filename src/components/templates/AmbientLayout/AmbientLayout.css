@@ -1,0 +1,39 @@
+.ora-ambient-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--ora-space-2xl) var(--ora-space-xl);
+  gap: var(--ora-space-xl);
+  background: var(--ora-deep);
+  color: var(--ora-ink);
+  font-family: var(--ora-font-mono);
+}
+
+.ora-ambient-layout__header {
+  text-align: center;
+}
+
+.ora-ambient-layout__orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ora-ambient-layout__controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ora-space-md);
+}
+
+.ora-ambient-layout__visualizer {
+  width: 100%;
+  max-width: 600px;
+}
+
+.ora-ambient-layout__footer {
+  color: var(--ora-dim);
+  font-size: var(--ora-text-xs);
+}

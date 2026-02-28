@@ -1,0 +1,42 @@
+.ora-grid-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--ora-deep);
+  color: var(--ora-ink);
+  font-family: var(--ora-font-mono);
+}
+
+.ora-grid-layout__toolbar {
+  flex-shrink: 0;
+}
+
+.ora-grid-layout__body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.ora-grid-layout__sidebar {
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.ora-grid-layout__canvas {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background: var(--ora-deep);
+}
+
+.ora-grid-layout__details {
+  width: 280px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--ora-border);
+  overflow-y: auto;
+  background: var(--ora-surface);
+}
+
+.ora-grid-layout__console {
+  flex-shrink: 0;
+}

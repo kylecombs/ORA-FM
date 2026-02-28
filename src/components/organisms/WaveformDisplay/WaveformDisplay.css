@@ -1,0 +1,8 @@
+/* ── WaveformDisplay ──────────────────────────────────── */
+
+.sampler-waveform-canvas {
+  display: block;
+  width: 100%;
+  border-radius: var(--ora-radius-sm);
+  border: 1px solid var(--ora-border, #252320);
+}

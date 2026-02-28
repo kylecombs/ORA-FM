@@ -13,6 +13,20 @@
   --glow:    rgba(184, 154, 106, 0.12);
 }
 
+:root[data-theme="light"] {
+  --ink:     #2a2a2a;
+  --dim:     #888888;
+  --deep:    #e0e0e0;
+  --surface: #d6d6d6;
+  --lift:    #cbcbcb;
+  --border:  #b0b0b0;
+  --gold:    #9a7a42;
+  --mist:    #4a7e9e;
+  --rose:    #a85e56;
+  --sage:    #4e8a5c;
+  --glow:    rgba(154, 122, 66, 0.14);
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -33,7 +47,7 @@ body::before {
   background-size: 256px 256px;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.6;
+  opacity: var(--ora-grain, 0.6);
 }
 
 /* ── Layout ───────────────────────────────── */

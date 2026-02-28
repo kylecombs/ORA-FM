@@ -1,0 +1,41 @@
+.ora-search {
+  display: flex;
+  align-items: center;
+  gap: var(--ora-space-xs);
+  background: var(--ora-deep);
+  border: 1px solid var(--ora-border);
+  border-radius: var(--ora-radius-sm);
+  padding: 0 var(--ora-space-sm);
+}
+
+.ora-search:focus-within {
+  border-color: var(--ora-gold);
+}
+
+.ora-search .ora-input {
+  border: none;
+  background: transparent;
+  padding-left: 0;
+}
+
+.ora-search .ora-input:focus {
+  border-color: transparent;
+}
+
+.ora-search__clear {
+  background: none;
+  border: none;
+  color: var(--ora-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.ora-search__clear:hover {
+  color: var(--ora-ink);
+}
+
+.ora-search--disabled {
+  opacity: 0.35;
+}

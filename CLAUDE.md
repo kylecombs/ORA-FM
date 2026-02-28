@@ -105,6 +105,40 @@ Per synthdef:
 4. Output the `.scsyndef` file to `public/supersonic/synthdefs/`
 5. Verify with `od -A x -t x1z` that the header starts with `53 43 67 66` (SCgf)
 
+## Storybook & Atomic Design System
+
+The project uses **Storybook 8** with a component library organized by atomic design:
+
+```
+src/components/
+├── foundations/          # Color palette & typography stories
+├── atoms/               # Button, Toggle, Input, Label, Badge, Knob, Icon
+├── molecules/           # ParameterControl, SearchField, ToolbarAction, StatusIndicator
+├── organisms/           # Toolbar, ModulePanel, ConsolePanel
+├── templates/           # GridLayout, AmbientLayout
+├── pages/               # Full page-level stories
+├── tokens.css           # Design tokens (CSS custom properties)
+└── index.js             # Barrel export
+```
+
+**When you create or modify any UI component at the atom, molecule, or organism level, you must also create or update its Storybook story.**
+
+Each component directory must contain:
+1. `ComponentName.jsx` — The React component
+2. `ComponentName.css` — Styles using `--ora-*` design tokens
+3. `ComponentName.stories.jsx` — Storybook stories
+4. `index.js` — Barrel export (`export { default } from './ComponentName'`)
+
+Story file requirements:
+- Default export with `title` matching the atomic level: `'Atoms/ComponentName'`, `'Molecules/ComponentName'`, or `'Organisms/ComponentName'`
+- Export the component as `component` for automatic controls
+- Include `argTypes` for all meaningful props
+- Provide at least one interactive story per major variant or state
+- Add a composite story (e.g. `AllVariants`) showing all variants side-by-side when the component has multiple visual states
+- Use design tokens (`var(--ora-*)`) for all colors, spacing, and typography — never hardcode raw values in components
+
+Run Storybook with `npm run storybook`. Build with `npm run build-storybook`.
+
 ## SuperSonic-Specific Notes
 
 - SuperSonic is **not** SuperCollider — there is no sclang, no default group, no node ID allocator. You are sending raw OSC messages.

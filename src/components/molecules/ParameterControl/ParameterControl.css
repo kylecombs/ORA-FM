@@ -1,0 +1,15 @@
+.ora-param {
+  display: flex;
+  align-items: center;
+  gap: var(--ora-space-sm);
+}
+
+.ora-param--disabled {
+  opacity: 0.35;
+}
+
+.ora-param__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}

@@ -1,0 +1,15 @@
+/* ── BreakpointEditor ──────────────────────────────────── */
+
+.bp-editor-wrap {
+  position: relative;
+  width: 100%;
+  height: 120px;
+  cursor: crosshair;
+  border-bottom: 1px solid rgba(37, 35, 32, 0.5);
+}
+
+.bp-editor-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

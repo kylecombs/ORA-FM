@@ -1,0 +1,73 @@
+import './Icon.css';
+
+const ICONS = {
+  play: (
+    <polygon points="5,3 19,12 5,21" />
+  ),
+  stop: (
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+  ),
+  plus: (
+    <>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </>
+  ),
+  minus: (
+    <line x1="5" y1="12" x2="19" y2="12" />
+  ),
+  record: (
+    <circle cx="12" cy="12" r="7" />
+  ),
+  save: (
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8" />
+  ),
+  load: (
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3" />
+  ),
+  wave: (
+    <path d="M2 12c2-4 4-8 6 0s4 4 6 0 4-8 6 0" />
+  ),
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </>
+  ),
+  chevronDown: (
+    <polyline points="6 9 12 15 18 9" />
+  ),
+  chevronRight: (
+    <polyline points="9 6 15 12 9 18" />
+  ),
+  close: (
+    <>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </>
+  ),
+};
+
+export default function Icon({ name, size = 16, color = 'currentColor', ...rest }) {
+  const glyph = ICONS[name];
+  if (!glyph) return null;
+
+  return (
+    <svg
+      className="ora-icon"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...rest}
+    >
+      {glyph}
+    </svg>
+  );
+}
+
+Icon.NAMES = Object.keys(ICONS);
