@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import WaveformDisplay from './WaveformDisplay';
 
 export default {
@@ -145,18 +145,18 @@ Empty.parameters = {
 export const WithPlayhead = () => {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(1);
-  const [playhead, setPlayhead] = useState(0);
-  const animRef = useRef(null);
+  const [playheadState, setPlayheadState] = useState(null);
 
+  // Start playback simulation on mount
   useEffect(() => {
-    const startTime = performance.now();
-    const tick = () => {
-      const elapsed = (performance.now() - startTime) % 2000;
-      setPlayhead(start + (elapsed / 2000) * (end - start));
-      animRef.current = requestAnimationFrame(tick);
-    };
-    tick();
-    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+    setPlayheadState({
+      trigTime: performance.now(),
+      rate: 1,
+      startPos: start,
+      endPos: end,
+      loop: true,
+      duration: 2, // 2 second sample
+    });
   }, [start, end]);
 
   return (
@@ -165,14 +165,14 @@ export const WithPlayhead = () => {
       startPos={start}
       endPos={end}
       onRegionChange={(s, e) => { setStart(s); setEnd(e); }}
-      playheadPos={playhead}
+      playheadState={playheadState}
       accentColor="#b89a6a"
       sampleName="playing: sine_440hz.wav"
     />
   );
 };
 WithPlayhead.parameters = {
-  docs: { description: { story: 'Animated playhead sweeping through the selected region.' } },
+  docs: { description: { story: 'Animated playhead using internal RAF loop. The component owns the animation.' } },
 };
 
 export const AllWaveforms = () => {
