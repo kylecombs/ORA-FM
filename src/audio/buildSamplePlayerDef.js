@@ -314,5 +314,20 @@ export function buildSamplePlayerDef() {
   // ── Variants ──
   w.writeInt16(0); // no variants
 
-  return w.toUint8Array();
+  const result = w.toUint8Array();
+
+  // Validate the binary
+  const header = String.fromCharCode(...result.slice(0, 4));
+  const version = new DataView(result.buffer, result.byteOffset, result.byteLength).getInt32(4, false);
+  console.log(`[buildSamplePlayerDef] Binary built: ${result.length} bytes`);
+  console.log(`[buildSamplePlayerDef] Header: "${header}", version: ${version}`);
+  console.log(`[buildSamplePlayerDef] Constants: [${constants.join(', ')}]`);
+  console.log(`[buildSamplePlayerDef] Params: ${paramNames.map(([n, i]) => `${n}[${i}]=${paramDefaults[i]}`).join(', ')}`);
+  console.log(`[buildSamplePlayerDef] UGens (${ugens.length}):`);
+  ugens.forEach((u, i) => {
+    const rateNames = ['scalar', 'control', 'audio'];
+    console.log(`  [${i}] ${u.name} (${rateNames[u.rate]}) inputs=${u.inputs.length} outputs=${u.outputs.length} special=${u.special}`);
+  });
+
+  return result;
 }

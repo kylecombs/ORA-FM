@@ -336,22 +336,10 @@ export default function NodeRenderer({
         const endP = node.params.end_pos ?? 1;
         const loopOn = (node.params.loop ?? 1) > 0.5;
 
-        // Compute playhead position from JS-side timing
-        let phPos = null;
+        // Pass playhead timing state directly — WaveformDisplay runs
+        // its own requestAnimationFrame loop to animate smoothly.
         const ph = samplePlayheads?.[node.id];
-        if (ph && sd) {
-          const elapsed = (performance.now() - ph.trigTime) / 1000;
-          const regionDur = (ph.endPos - ph.startPos) * ph.duration / Math.abs(ph.rate || 1);
-          if (regionDur > 0) {
-            if (ph.loop) {
-              const progress = (elapsed % regionDur) / regionDur;
-              phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
-            } else if (elapsed < regionDur) {
-              const progress = elapsed / regionDur;
-              phPos = ph.startPos + progress * (ph.endPos - ph.startPos);
-            }
-          }
-        }
+        const playheadState = (ph && sd) ? ph : null;
 
         return (
           <div className="sampler-body">
@@ -363,7 +351,7 @@ export default function NodeRenderer({
               accentColor={schema.accent}
               width={(schema.width || 280) - 22}
               height={80}
-              playheadPos={phPos}
+              playheadState={playheadState}
               sampleName={sd?.name ?? null}
             />
             <div className="sampler-controls">

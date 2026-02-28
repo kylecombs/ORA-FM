@@ -213,6 +213,9 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
     for (const id of Object.keys(nodes)) {
       const nid = parseInt(id);
       if (!live.has(nid) && engine.isPlaying(nid)) {
+        if (nodes[id].type === 'sample_player') {
+          console.log(`[AudioRouting:STOP] Stopping sample_player nodeId=${nid} (not in live set)`);
+        }
         if (nodes[id].type === 'print') {
           engine.stopPrintModule(nid);
         }
@@ -221,6 +224,14 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
           scopeBuffersRef.current.delete(nid);
         }
         engine.stop(nid);
+      }
+    }
+
+    // Debug: log sample_player live status
+    for (const id of Object.keys(nodes)) {
+      const nid = parseInt(id);
+      if (nodes[id].type === 'sample_player') {
+        console.log(`[AudioRouting:LIVE] sample_player nodeId=${nid}: live=${live.has(nid)}, playing=${engine.isPlaying(nid)}`);
       }
     }
 
@@ -263,6 +274,11 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
         if (routing.isModulator) playParams.amp = ampToSend;
         if (node.quantize && playParams.freq != null) {
           playParams.freq = quantizeFreq(playParams.freq);
+        }
+        if (node.type === 'sample_player') {
+          console.log(`[AudioRouting:PLAY] 🎵 Starting sample_player nodeId=${id}, synthDef="${schema.synthDef}"`);
+          console.log(`[AudioRouting:PLAY]   outBus=${routing.effectiveOutBus}, pan=${pan}`);
+          console.log(`[AudioRouting:PLAY]   playParams:`, JSON.stringify(playParams));
         }
         engine.play(id, schema.synthDef, playParams);
       } else {
