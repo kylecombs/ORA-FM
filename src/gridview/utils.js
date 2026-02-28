@@ -62,6 +62,10 @@ export function getParamPortPos(node, schema, paramKey) {
   if (node.type === 'sequencer' && paramKey === 'trig') {
     return { x: node.x, y: node.y + HEADER_H + 10 };
   }
+  // Lowpass gate CV port: positioned as second input port
+  if (node.type === 'lowpass_gate' && paramKey === 'level') {
+    return { x: node.x, y: node.y + PORT_SECTION_Y + 11 + PORT_SPACING };
+  }
   const paramKeys = Object.keys(schema.params);
   const idx = paramKeys.indexOf(paramKey);
   if (idx === -1) return { x: node.x, y: node.y };

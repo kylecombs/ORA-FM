@@ -1507,6 +1507,35 @@
   opacity: 0.5;
 }
 
+/* ── Lowpass gate CV input port ───────────────── */
+.sense-node.fx .trig-port {
+  width: 10px;
+  height: 10px;
+  left: -5px;
+  border-width: 1.5px;
+  border-color: var(--accent);
+  opacity: 0.6;
+  transition: all 0.15s ease;
+}
+
+.sense-node.fx .trig-port:hover {
+  opacity: 1;
+  transform: rotate(45deg) scale(1.3);
+}
+
+.sense-node.fx .trig-port.modulated {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 50%, var(--lift, #1a1917));
+  border-color: var(--accent);
+}
+
+.sense-node.fx .trig-port .port-label-in {
+  left: 14px;
+  font-size: 0.42rem;
+  color: var(--accent);
+  opacity: 0.5;
+}
+
 /* ── Output value readout ─────────────────────── */
 .env-out-val {
   margin-left: auto;

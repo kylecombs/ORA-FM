@@ -147,6 +147,18 @@ export default function NodeRenderer({
         </div>
       )}
 
+      {/* Lowpass gate CV input port */}
+      {node.type === 'lowpass_gate' && (
+        <div
+          className={`node-port mod-input trig-port${connecting ? ' connectable' : ''}${'level' in modulatedParams ? ' modulated' : ''}`}
+          style={{ top: PORT_SECTION_Y + 11 + 1 * PORT_SPACING - 6 }}
+          onClick={(e) => handleParamPortClick(e, node.id, 'level')}
+          title="gate CV input"
+        >
+          <span className="port-label port-label-in">gate</span>
+        </div>
+      )}
+
       {/* Sample player trigger input port */}
       {isSampler && (
         <div
@@ -161,6 +173,8 @@ export default function NodeRenderer({
 
       {/* Parameter modulation input ports */}
       {!isControl && !isScript && !isAudioOut && Object.keys(schema.params).map((key, i) => {
+        // Skip level modInput for lowpass_gate — the dedicated gate port replaces it
+        if (node.type === 'lowpass_gate' && key === 'level') return null;
         const isModulated = key in modulatedParams;
         const isAudioRateMod = audioRateModulatedParams.has(key);
         const showPort = connecting || isModulated;
