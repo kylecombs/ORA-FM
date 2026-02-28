@@ -624,6 +624,7 @@ export const NODE_SCHEMA = {
     accent: '#7abfbf',
     synthDef: 'spectral_freeze',
     category: 'fx',
+    needsFFTBuffer: true,
     inputs: ['in'],
     outputs: ['out'],
     params: {

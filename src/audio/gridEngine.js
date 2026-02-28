@@ -94,6 +94,9 @@ export class GridEngine {
     // Buffer allocator for sample players
     this._nextBuffer = 100; // Start high to avoid conflicts
     this._buffers = new Map(); // graphNodeId → bufNum
+
+    // FFT buffer allocator (for spectral effects)
+    this._fftBuffers = new Map(); // graphNodeId → bufNum
   }
 
   async boot() {
@@ -448,7 +451,37 @@ export class GridEngine {
     return this._scopeGraphToBuf.get(graphId) ?? null;
   }
 
-  // ── Buffer management (for sample player) ─────────────
+  // ── FFT buffer management (for spectral effects) ────────
+
+  static FFT_BUF_FRAMES = 2048;
+
+  // Allocate a scsynth buffer for FFT processing
+  allocFFTBuffer(graphId) {
+    if (this._fftBuffers.has(graphId)) return this._fftBuffers.get(graphId);
+    const bufnum = 200 + graphId; // Use high range to avoid conflicts with scope (100+) and samples
+    this._fftBuffers.set(graphId, bufnum);
+    try {
+      this.sonic.send('/b_alloc', bufnum, GridEngine.FFT_BUF_FRAMES, 1);
+    } catch { /* ignore */ }
+    return bufnum;
+  }
+
+  // Get the FFT buffer number for a graph node (or null)
+  getFFTBuffer(graphId) {
+    return this._fftBuffers.get(graphId) ?? null;
+  }
+
+  // Free an FFT buffer
+  freeFFTBuffer(graphId) {
+    const buf = this._fftBuffers.get(graphId);
+    if (buf != null) {
+      this._fftBuffers.delete(graphId);
+      const sonic = this.sonic;
+      setTimeout(() => {
+        try { sonic.send('/b_free', buf); } catch { /* ignore */ }
+      }, 500);
+    }
+  }
 
   // Allocate a buffer slot for a graph node
   allocBuffer(graphId) {

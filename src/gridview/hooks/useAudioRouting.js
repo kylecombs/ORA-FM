@@ -220,6 +220,9 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
           engine.stopScope(nid);
           scopeBuffersRef.current.delete(nid);
         }
+        if (NODE_SCHEMA[nodes[id].type]?.needsFFTBuffer) {
+          engine.freeFFTBuffer(nid);
+        }
         engine.stop(nid);
       }
     }
@@ -233,6 +236,9 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
         if (!prev || prev.inBus !== cur.inBus || prev.outBus !== cur.outBus) {
           if (nodes[id]?.type === 'scope') {
             scopeBuffersRef.current.delete(id);
+          }
+          if (NODE_SCHEMA[nodes[id]?.type]?.needsFFTBuffer) {
+            engine.freeFFTBuffer(id);
           }
           engine.stop(id);
         }
@@ -296,11 +302,16 @@ export function useAudioRouting({ nodes, connections, engineRef, scopeBuffersRef
             bufnum: scopeBuf,
           });
         } else {
-          engine.playFx(id, schema.synthDef, {
+          const fxParams = {
             ...node.params,
             in_bus: routing.inBus,
             out_bus: routing.effectiveOutBus,
-          });
+          };
+          // Allocate FFT buffer for spectral effect nodes
+          if (schema.needsFFTBuffer) {
+            fxParams.bufnum = engine.allocFFTBuffer(id);
+          }
+          engine.playFx(id, schema.synthDef, fxParams);
         }
       } else {
         for (const [k, v] of Object.entries(node.params)) {

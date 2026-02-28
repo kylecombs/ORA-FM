@@ -323,4 +323,39 @@ const SOURCE_DEFS = [
 
 ---
 
+## 14. LocalBuf May Silently Fail in SuperSonic — Use Pre-Allocated Buffers for FFT
+
+**Symptom:** A SynthDef using `FFT(LocalBuf(2048), ...)` loads without error but produces silence from the IFFT output. The dry signal path (bypassing FFT/IFFT) works fine. The issue persists even with correct bus routing.
+
+**Root cause:** `LocalBuf` allocates buffers from scsynth's RT memory pool at synth construction time. In SuperSonic's WASM/NRT environment, this allocation may silently fail or return an invalid buffer, causing FFT to write nothing meaningful and IFFT to output silence. Desktop scsynth handles LocalBuf reliably, but the WASM adaptation may not support the RT memory allocator correctly for local buffers.
+
+**Fix:** Replace `LocalBuf` with a pre-allocated buffer passed as a parameter:
+
+```supercollider
+// Before (broken):
+SynthDef(\spectral_freeze, { |in_bus=0, out_bus=0, freeze=0, mix=1, amp=1|
+    var chain = FFT(LocalBuf(2048), In.ar(in_bus, 1));
+    // ...
+});
+
+// After (working):
+SynthDef(\spectral_freeze, { |in_bus=0, out_bus=0, bufnum=0, freeze=0, mix=1, amp=1|
+    var chain = FFT(bufnum, In.ar(in_bus, 1));
+    // ...
+});
+```
+
+The buffer is allocated by the engine before synth creation:
+```javascript
+engine.allocFFTBuffer(graphId);  // sends /b_alloc with 2048 frames
+```
+
+The routing code passes `bufnum` to the synth alongside `in_bus` and `out_bus`. The schema property `needsFFTBuffer: true` flags nodes that require this allocation.
+
+**Lesson:** In SuperSonic, prefer pre-allocated buffers (via `/b_alloc`) over `LocalBuf` for FFT processing. `LocalBuf` and `MaxLocalBufs` may not work reliably in the WASM/NRT environment. This matches the pattern already used by the scope module (`ora_scope`), which also uses pre-allocated buffers.
+
+**Reference:** `scripts/generate-spectral-freeze-synthdef.cjs`, `src/audio/gridEngine.js` (allocFFTBuffer), `src/gridview/hooks/useAudioRouting.js`, `src/gridview/nodeSchema.js` (needsFFTBuffer)
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

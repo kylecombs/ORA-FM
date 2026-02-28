@@ -7,10 +7,14 @@
 //  and holds it indefinitely. Includes dry/wet crossfade
 //  and amplitude control.
 //
+//  Uses a pre-allocated buffer (passed via bufnum parameter)
+//  instead of LocalBuf for FFT storage. The buffer must be
+//  allocated by the engine before creating this synth.
+//
 //  Equivalent SuperCollider source:
-//    SynthDef(\spectral_freeze, { |in_bus=0, out_bus=0, freeze=0, mix=1, amp=1|
+//    SynthDef(\spectral_freeze, { |in_bus=0, out_bus=0, bufnum=0, freeze=0, mix=1, amp=1|
 //        var sig = In.ar(in_bus, 1);
-//        var chain = FFT(LocalBuf(2048), sig);
+//        var chain = FFT(bufnum, sig);
 //        var frozen = PV_MagFreeze(chain, freeze);
 //        var wet = IFFT(frozen);
 //        var pan = mix.madd(2, -1);  // 0..1 → -1..1
@@ -21,6 +25,7 @@
 //  Parameters:
 //    in_bus  (kr, default 0)  — input audio bus
 //    out_bus (kr, default 0)  — output audio bus
+//    bufnum (kr, default 0)  — pre-allocated FFT buffer number
 //    freeze (kr, default 0)  — freeze gate: 0 = pass-through, >0 = freeze
 //    mix    (kr, default 1)  — dry/wet crossfade: 0 = dry, 1 = frozen
 //    amp    (kr, default 1)  — output amplitude
@@ -73,67 +78,67 @@ function buildSpectralFreezeSynthDef() {
 
   // ── Constants ──
   //   [0] = 0.0    defaults, FFT wintype/winsize
-  //   [1] = 1.0    MaxLocalBufs count, LocalBuf numChannels, FFT active
-  //   [2] = 2048.0 LocalBuf numFrames (FFT size)
-  //   [3] = 0.5    FFT hop
-  //   [4] = 2.0    MulAdd mul (mix scaling)
-  //   [5] = -1.0   MulAdd add (mix offset)
-  writeInt32(6);          // 6 constants
+  //   [1] = 0.5    FFT hop
+  //   [2] = 1.0    FFT active
+  //   [3] = 2.0    MulAdd mul (mix scaling)
+  //   [4] = -1.0   MulAdd add (mix offset)
+  writeInt32(5);          // 5 constants
   writeFloat32(0.0);      // [0]
-  writeFloat32(1.0);      // [1]
-  writeFloat32(2048.0);   // [2]
-  writeFloat32(0.5);      // [3]
-  writeFloat32(2.0);      // [4]
-  writeFloat32(-1.0);     // [5]
+  writeFloat32(0.5);      // [1]
+  writeFloat32(1.0);      // [2]
+  writeFloat32(2.0);      // [3]
+  writeFloat32(-1.0);     // [4]
 
   // ── Parameters ──
-  writeInt32(5);          // 5 parameters
+  writeInt32(6);          // 6 parameters
   writeFloat32(0.0);      // in_bus  default = 0
   writeFloat32(0.0);      // out_bus default = 0
+  writeFloat32(0.0);      // bufnum default = 0
   writeFloat32(0.0);      // freeze  default = 0
   writeFloat32(1.0);      // mix     default = 1
   writeFloat32(1.0);      // amp     default = 1
 
   // ── Parameter Names ──
-  writeInt32(5);
+  writeInt32(6);
   writePString('in_bus');
   writeInt32(0);
   writePString('out_bus');
   writeInt32(1);
-  writePString('freeze');
+  writePString('bufnum');
   writeInt32(2);
-  writePString('mix');
+  writePString('freeze');
   writeInt32(3);
-  writePString('amp');
+  writePString('mix');
   writeInt32(4);
+  writePString('amp');
+  writeInt32(5);
 
-  // ── UGens (10 total) ──
+  // ── UGens (8 total) ──
   //
-  //   0  Control.kr       → 5 outputs (in_bus, out_bus, freeze, mix, amp)
+  //   0  Control.kr       → 6 outputs (in_bus, out_bus, bufnum, freeze, mix, amp)
   //   1  In.ar            → 1 audio output (reads in_bus)
-  //   2  MaxLocalBufs     → 1 scalar output (reserves 1 local buffer)
-  //   3  LocalBuf         → 1 scalar output (2048-frame FFT buffer)
-  //   4  FFT              → 1 control output (forward transform)
-  //   5  PV_MagFreeze     → 1 control output (freeze magnitude spectrum)
-  //   6  IFFT             → 1 audio output (inverse transform)
-  //   7  MulAdd.kr        → 1 control output (mix → XFade2 pan: 0..1 → -1..1)
-  //   8  XFade2.ar        → 1 audio output (dry/wet crossfade)
-  //   9  Out.ar           → 0 outputs (writes stereo to bus)
+  //   2  FFT              → 1 control output (forward transform)
+  //   3  PV_MagFreeze     → 1 control output (freeze magnitude spectrum)
+  //   4  IFFT             → 1 audio output (inverse transform)
+  //   5  MulAdd.kr        → 1 control output (mix → XFade2 pan: 0..1 → -1..1)
+  //   6  XFade2.ar        → 1 audio output (dry/wet crossfade)
+  //   7  Out.ar           → 0 outputs (writes stereo to bus)
   //
-  writeInt32(10);
+  writeInt32(8);
 
   // ── UGen 0: Control.kr ──
-  // 0 inputs, 5 outputs (one per parameter)
+  // 0 inputs, 6 outputs (one per parameter)
   writePString('Control');
   writeInt8(1);           // rate: control
   writeInt32(0);          // 0 inputs
-  writeInt32(5);          // 5 outputs
+  writeInt32(6);          // 6 outputs
   writeInt16(0);          // special index
   writeInt8(1);           // output 0 rate: control (in_bus)
   writeInt8(1);           // output 1 rate: control (out_bus)
-  writeInt8(1);           // output 2 rate: control (freeze)
-  writeInt8(1);           // output 3 rate: control (mix)
-  writeInt8(1);           // output 4 rate: control (amp)
+  writeInt8(1);           // output 2 rate: control (bufnum)
+  writeInt8(1);           // output 3 rate: control (freeze)
+  writeInt8(1);           // output 4 rate: control (mix)
+  writeInt8(1);           // output 5 rate: control (amp)
 
   // ── UGen 1: In.ar(in_bus) ──
   // Reads 1 channel of audio from in_bus
@@ -148,66 +153,35 @@ function buildSpectralFreezeSynthDef() {
   // outputs
   writeInt8(2);           // output 0 rate: audio
 
-  // ── UGen 2: MaxLocalBufs(1) ──
-  // Must appear before LocalBuf; reserves local buffer slots
-  writePString('MaxLocalBufs');
-  writeInt8(0);           // rate: scalar
-  writeInt32(1);          // 1 input
-  writeInt32(1);          // 1 output
-  writeInt16(0);          // special index
-  // input 0: count = constant 1.0
-  writeInt32(-1);         // src: constant
-  writeInt32(1);          // constant index 1 (= 1.0)
-  // outputs
-  writeInt8(0);           // output 0 rate: scalar
-
-  // ── UGen 3: LocalBuf(numChannels=1, numFrames=2048) ──
-  // Allocates a local buffer for FFT chain storage
-  writePString('LocalBuf');
-  writeInt8(0);           // rate: scalar
-  writeInt32(3);          // 3 inputs
-  writeInt32(1);          // 1 output
-  writeInt16(0);          // special index
-  // input 0: numChannels = constant 1.0
-  writeInt32(-1);         // src: constant
-  writeInt32(1);          // constant index 1 (= 1.0)
-  // input 1: numFrames = constant 2048.0
-  writeInt32(-1);         // src: constant
-  writeInt32(2);          // constant index 2 (= 2048.0)
-  // input 2: MaxLocalBufs reference
-  writeInt32(2);          // src: UGen 2 (MaxLocalBufs)
-  writeInt32(0);          // output 0
-  // outputs
-  writeInt8(0);           // output 0 rate: scalar
-
-  // ── UGen 4: FFT(buffer, in, hop=0.5, wintype=0, active=1, winsize=0) ──
+  // ── UGen 2: FFT(bufnum, in, hop=0.5, wintype=0, active=1, winsize=0) ──
+  // Uses pre-allocated buffer from bufnum parameter
   writePString('FFT');
   writeInt8(1);           // rate: control
   writeInt32(6);          // 6 inputs
   writeInt32(1);          // 1 output
   writeInt16(0);          // special index
-  // input 0: buffer = LocalBuf output
-  writeInt32(3);          // src: UGen 3 (LocalBuf)
-  writeInt32(0);          // output 0
+  // input 0: buffer = Control output 2 (bufnum)
+  writeInt32(0);          // src: UGen 0 (Control)
+  writeInt32(2);          // output index 2 (bufnum)
   // input 1: in = In.ar output
   writeInt32(1);          // src: UGen 1 (In)
   writeInt32(0);          // output 0
   // input 2: hop = 0.5
   writeInt32(-1);         // src: constant
-  writeInt32(3);          // constant index 3 (= 0.5)
+  writeInt32(1);          // constant index 1 (= 0.5)
   // input 3: wintype = 0 (Hann)
   writeInt32(-1);         // src: constant
   writeInt32(0);          // constant index 0 (= 0.0)
   // input 4: active = 1
   writeInt32(-1);         // src: constant
-  writeInt32(1);          // constant index 1 (= 1.0)
+  writeInt32(2);          // constant index 2 (= 1.0)
   // input 5: winsize = 0
   writeInt32(-1);         // src: constant
   writeInt32(0);          // constant index 0 (= 0.0)
   // outputs
   writeInt8(1);           // output 0 rate: control
 
-  // ── UGen 5: PV_MagFreeze(chain, freeze) ──
+  // ── UGen 3: PV_MagFreeze(chain, freeze) ──
   // When freeze > 0, holds the current magnitude spectrum
   writePString('PV_MagFreeze');
   writeInt8(1);           // rate: control
@@ -215,15 +189,15 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(1);          // 1 output
   writeInt16(0);          // special index
   // input 0: chain = FFT output
-  writeInt32(4);          // src: UGen 4 (FFT)
+  writeInt32(2);          // src: UGen 2 (FFT)
   writeInt32(0);          // output 0
-  // input 1: freeze = Control output 2
+  // input 1: freeze = Control output 3
   writeInt32(0);          // src: UGen 0 (Control)
-  writeInt32(2);          // output index 2 (freeze)
+  writeInt32(3);          // output index 3 (freeze)
   // outputs
   writeInt8(1);           // output 0 rate: control
 
-  // ── UGen 6: IFFT(chain, wintype=0, winsize=0) ──
+  // ── UGen 4: IFFT(chain, wintype=0, winsize=0) ──
   // Converts frozen spectrum back to audio
   writePString('IFFT');
   writeInt8(2);           // rate: audio
@@ -231,7 +205,7 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(1);          // 1 output
   writeInt16(0);          // special index
   // input 0: chain = PV_MagFreeze output
-  writeInt32(5);          // src: UGen 5 (PV_MagFreeze)
+  writeInt32(3);          // src: UGen 3 (PV_MagFreeze)
   writeInt32(0);          // output 0
   // input 1: wintype = 0
   writeInt32(-1);         // src: constant
@@ -242,26 +216,26 @@ function buildSpectralFreezeSynthDef() {
   // outputs
   writeInt8(2);           // output 0 rate: audio
 
-  // ── UGen 7: MulAdd.kr(mix, 2.0, -1.0) ──
+  // ── UGen 5: MulAdd.kr(mix, 2.0, -1.0) ──
   // Maps mix (0..1) to XFade2 pan range (-1..1)
   writePString('MulAdd');
   writeInt8(1);           // rate: control (follows input rate)
   writeInt32(3);          // 3 inputs
   writeInt32(1);          // 1 output
   writeInt16(0);          // special index
-  // input 0: in = Control output 3 (mix)
+  // input 0: in = Control output 4 (mix)
   writeInt32(0);          // src: UGen 0 (Control)
-  writeInt32(3);          // output index 3 (mix)
+  writeInt32(4);          // output index 4 (mix)
   // input 1: mul = 2.0
   writeInt32(-1);         // src: constant
-  writeInt32(4);          // constant index 4 (= 2.0)
+  writeInt32(3);          // constant index 3 (= 2.0)
   // input 2: add = -1.0
   writeInt32(-1);         // src: constant
-  writeInt32(5);          // constant index 5 (= -1.0)
+  writeInt32(4);          // constant index 4 (= -1.0)
   // outputs
   writeInt8(1);           // output 0 rate: control
 
-  // ── UGen 8: XFade2.ar(dry, wet, pan, level) ──
+  // ── UGen 6: XFade2.ar(dry, wet, pan, level) ──
   // Equal-power crossfade between dry input and frozen output
   writePString('XFade2');
   writeInt8(2);           // rate: audio
@@ -272,18 +246,18 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(1);          // src: UGen 1 (In)
   writeInt32(0);          // output 0
   // input 1: inB = IFFT output (wet/frozen signal)
-  writeInt32(6);          // src: UGen 6 (IFFT)
+  writeInt32(4);          // src: UGen 4 (IFFT)
   writeInt32(0);          // output 0
   // input 2: pan = MulAdd output (mix mapped to -1..1)
-  writeInt32(7);          // src: UGen 7 (MulAdd)
+  writeInt32(5);          // src: UGen 5 (MulAdd)
   writeInt32(0);          // output 0
-  // input 3: level = Control output 4 (amp)
+  // input 3: level = Control output 5 (amp)
   writeInt32(0);          // src: UGen 0 (Control)
-  writeInt32(4);          // output index 4 (amp)
+  writeInt32(5);          // output index 5 (amp)
   // outputs
   writeInt8(2);           // output 0 rate: audio
 
-  // ── UGen 9: Out.ar(bus, signal, signal) ──
+  // ── UGen 7: Out.ar(bus, signal, signal) ──
   // Writes stereo output (duplicated mono)
   writePString('Out');
   writeInt8(2);           // rate: audio
@@ -294,10 +268,10 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(0);          // src: UGen 0 (Control)
   writeInt32(1);          // output index 1 (out_bus)
   // input 1: channel 0 = XFade2 output
-  writeInt32(8);          // src: UGen 8 (XFade2)
+  writeInt32(6);          // src: UGen 6 (XFade2)
   writeInt32(0);          // output 0
   // input 2: channel 1 = XFade2 output (same signal, stereo dup)
-  writeInt32(8);          // src: UGen 8 (XFade2)
+  writeInt32(6);          // src: UGen 6 (XFade2)
   writeInt32(0);          // output 0
 
   // ── Variants ──
