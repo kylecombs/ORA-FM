@@ -257,7 +257,7 @@ export function buildSamplePlayerDef() {
       name: 'BinaryOpUGen', rate: RATE_AUDIO,
       inputs: [ugen(12, 0), konst(0)], // ugen12, const[0]=0
       outputs: [RATE_AUDIO],
-      special: 12, // max
+      special: 13, // max
     },
 
     // UGen 14: BinaryOpUGen.ar(*) — left * finalAmp

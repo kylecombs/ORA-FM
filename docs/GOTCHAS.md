@@ -285,4 +285,31 @@ If you increase `SCOPE_BUF_FRAMES`, increase the polling interval proportionally
 
 ---
 
+## 12. Sample Player Produces No Audio (Silent Playback)
+
+**Symptom:** Loading a sample into the sample player (built-in or user file) shows the waveform correctly, but no audio is heard. The synth is running and connected to AudioOut with no errors in the console.
+
+**Root cause:** In the runtime-generated SynthDef binary (`buildSamplePlayerDef.js`), the `BinaryOpUGen` that computes `max(amp + amp_mod, 0)` used the wrong `special` index. SuperCollider's BinaryOpUGen special indices are:
+
+- `12` = `min`
+- `13` = `max`
+
+The code had `special: 12` (min) instead of `special: 13` (max). This computed `min(amp, 0)` instead of `max(amp, 0)`, which with a default `amp` of 0.5 produces `min(0.5, 0) = 0` — the amplitude was always clamped to zero, silencing the output entirely.
+
+**Fix:** Change `special: 12` to `special: 13` in UGen 13 of `buildSamplePlayerDef.js`:
+
+```javascript
+// UGen 13: BinaryOpUGen.ar(max) — max(amp + amp_mod, 0)
+{
+  name: 'BinaryOpUGen', rate: RATE_AUDIO,
+  inputs: [ugen(12, 0), konst(0)],
+  outputs: [RATE_AUDIO],
+  special: 13, // max (NOT 12, which is min)
+},
+```
+
+**Reference:** `src/audio/buildSamplePlayerDef.js:260`
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*
