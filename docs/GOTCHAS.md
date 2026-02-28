@@ -285,7 +285,31 @@ If you increase `SCOPE_BUF_FRAMES`, increase the polling interval proportionally
 
 ---
 
-## 12. Custom FX SynthDef Using `out` Instead of `out_bus` — Silent Output in FX Chains
+## 12. Sample Player Produces No Audio (Silent Playback)
+
+**Symptom:** Loading a sample into the sample player (built-in or user file) shows the waveform correctly, but no audio is heard. The synth is running and connected to AudioOut with no errors in the console.
+
+**Root cause:** In the runtime-generated SynthDef binary (`buildSamplePlayerDef.js`), the `BinaryOpUGen` that computes `max(amp + amp_mod, 0)` used the wrong `special` index. SuperCollider's BinaryOpUGen special indices are:
+
+- `12` = `min`
+- `13` = `max`
+
+The code had `special: 12` (min) instead of `special: 13` (max). This computed `min(amp, 0)` instead of `max(amp, 0)`, which with a default `amp` of 0.5 produces `min(0.5, 0) = 0` — the amplitude was always clamped to zero, silencing the output entirely.
+
+**Fix:** Change `special: 12` to `special: 13` in UGen 13 of `buildSamplePlayerDef.js`:
+
+```javascript
+// UGen 13: BinaryOpUGen.ar(max) — max(amp + amp_mod, 0)
+{
+  name: 'BinaryOpUGen', rate: RATE_AUDIO,
+  inputs: [ugen(12, 0), konst(0)],
+  outputs: [RATE_AUDIO],
+  special: 13, // max (NOT 12, which is min)
+},
+```
+
+**Reference:** `src/audio/buildSamplePlayerDef.js:260`
+## 13. Custom FX SynthDef Using `out` Instead of `out_bus` — Silent Output in FX Chains
 
 **Symptom:** The Spectral Freeze module produces silence when its wet signal is routed through downstream FX modules before reaching AudioOut. The dry signal (mix=0) also fails in chained scenarios. When connected directly to AudioOut, it may appear to work because the default output bus happens to be 0 (hardware out).
 
@@ -301,7 +325,7 @@ When the graph requires an intermediate audio bus (e.g., Source → Spectral Fre
 
 ---
 
-## 13. LFO Module Modulation Has No Effect (SynthDef Not Loaded)
+## 14. LFO Module Modulation Has No Effect (SynthDef Not Loaded)
 
 **Symptom:** Connecting the LFO module's output to any parameter input on another module produces no modulation effect. The target parameter stays at its base value as if no cable is connected.
 
