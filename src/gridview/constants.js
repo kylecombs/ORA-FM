@@ -63,4 +63,5 @@ export const MOD_DEPTH_SCALES = {
   chaos:    0.5,    // amp 0.5 → ±0.25 chaos param deviation (range 1–2)
   timbre:   1,      // amp 0.5 → ±0.5 waveshape morph (full range)
   level:    1,      // amp 0.5 → ±0.5 gate level modulation (full range)
+  gate:     1,      // amp 0.5 → ±0.5 gate CV modulation (full range)
 };
