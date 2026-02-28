@@ -173,6 +173,8 @@ export class GridEngine {
     // Load the runtime-built sample_player SynthDef via /d_recv
     this.onStatus?.('Loading sample_player...');
     const samplePlayerDef = buildSamplePlayerDef();
+    console.log(`[GridEngine:BOOT] sample_player SynthDef binary: ${samplePlayerDef.length} bytes`);
+    console.log(`[GridEngine:BOOT] SynthDef header bytes:`, Array.from(samplePlayerDef.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' '));
     this.sonic.send('/d_recv', samplePlayerDef);
 
     // Start the master limiter (always running, clips bus 0 output)
@@ -194,6 +196,13 @@ export class GridEngine {
     const flat = [];
     for (const [k, v] of Object.entries(params)) {
       flat.push(k, v);
+    }
+
+    if (synthDef === 'sample_player') {
+      console.log(`[GridEngine:PLAY] 🎵 sample_player synth created: graphId=${graphId}, synthId=${id}`);
+      console.log(`[GridEngine:PLAY]   params:`, JSON.stringify(params));
+      console.log(`[GridEngine:PLAY]   flat args:`, flat);
+      console.log(`[GridEngine:PLAY]   buffer assigned:`, this._buffers.get(graphId) ?? 'NONE');
     }
 
     // addAction 0 = addToHead, target = group 1
@@ -256,7 +265,13 @@ export class GridEngine {
   setParam(graphId, param, value) {
     const id = this._active.get(graphId);
     if (id != null) {
+      // Log sample_player param changes for debugging
+      if (param === 'buf' || param === 'start_pos' || param === 'end_pos' || param === 't_trig') {
+        console.log(`[GridEngine:PARAM] setParam(graphId=${graphId}, synthId=${id}) ${param}=${value}`);
+      }
       try { this.sonic.send('/n_set', id, param, value); } catch { /* ignore */ }
+    } else if (param === 'buf' || param === 't_trig') {
+      console.warn(`[GridEngine:PARAM] setParam(${param}=${value}) but graphId=${graphId} has no active synth`);
     }
   }
 
@@ -452,9 +467,13 @@ export class GridEngine {
 
   // Allocate a buffer slot for a graph node
   allocBuffer(graphId) {
-    if (this._buffers.has(graphId)) return this._buffers.get(graphId);
+    if (this._buffers.has(graphId)) {
+      console.log(`[GridEngine:BUF] allocBuffer(${graphId}) → reusing existing buf=${this._buffers.get(graphId)}`);
+      return this._buffers.get(graphId);
+    }
     const buf = this._nextBuffer++;
     this._buffers.set(graphId, buf);
+    console.log(`[GridEngine:BUF] allocBuffer(${graphId}) → new buf=${buf} (nextBuffer now ${this._nextBuffer})`);
     return buf;
   }
 
@@ -466,28 +485,39 @@ export class GridEngine {
   // Load audio data into a buffer via /b_allocFile (SuperSonic extension)
   // audioData should be a Uint8Array of the raw audio file bytes (FLAC, WAV, OGG, MP3)
   loadSampleBuffer(graphId, audioData) {
-    if (!this.booted) return null;
+    if (!this.booted) {
+      console.warn('[GridEngine:BUF] loadSampleBuffer called but engine not booted');
+      return null;
+    }
     const bufNum = this.allocBuffer(graphId);
+    console.log(`[GridEngine:BUF] loadSampleBuffer(graphId=${graphId}) → bufNum=${bufNum}, audioData=${audioData.length} bytes`);
     try {
       this.sonic.send('/b_allocFile', bufNum, audioData);
+      console.log(`[GridEngine:BUF] /b_allocFile sent for buf=${bufNum}`);
     } catch (e) {
-      console.error('[GridEngine] Failed to load sample buffer:', e);
+      console.error('[GridEngine:BUF] /b_allocFile FAILED:', e);
     }
     return bufNum;
   }
 
   // Load a built-in sample by name (fetches from /supersonic/samples/)
   async loadBuiltinSample(graphId, sampleName) {
-    if (!this.booted) return null;
+    if (!this.booted) {
+      console.warn('[GridEngine:BUF] loadBuiltinSample called but engine not booted');
+      return null;
+    }
     const bufNum = this.allocBuffer(graphId);
+    console.log(`[GridEngine:BUF] loadBuiltinSample(graphId=${graphId}, "${sampleName}") → bufNum=${bufNum}`);
     try {
       // Fetch the sample file and send as raw bytes
       const resp = await fetch(`/supersonic/samples/${sampleName}.flac`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = new Uint8Array(await resp.arrayBuffer());
+      console.log(`[GridEngine:BUF] Fetched "${sampleName}.flac": ${data.length} bytes`);
       this.sonic.send('/b_allocFile', bufNum, data);
+      console.log(`[GridEngine:BUF] /b_allocFile sent for buf=${bufNum} ("${sampleName}")`);
     } catch (e) {
-      console.error(`[GridEngine] Failed to load sample "${sampleName}":`, e);
+      console.error(`[GridEngine:BUF] loadBuiltinSample FAILED for "${sampleName}":`, e);
     }
     return bufNum;
   }
@@ -496,6 +526,7 @@ export class GridEngine {
   freeBuffer(graphId) {
     const buf = this._buffers.get(graphId);
     if (buf != null) {
+      console.log(`[GridEngine:BUF] freeBuffer(graphId=${graphId}) → buf=${buf}`);
       try { this.sonic.send('/b_free', buf); } catch { /* ignore */ }
       this._buffers.delete(graphId);
     }
@@ -505,7 +536,12 @@ export class GridEngine {
   triggerSample(graphId) {
     const id = this._active.get(graphId);
     if (id != null) {
-      try { this.sonic.send('/n_set', id, 't_trig', 1); } catch { /* ignore */ }
+      console.log(`[GridEngine:TRIG] triggerSample(graphId=${graphId}) → synthId=${id}, sending /n_set t_trig 1`);
+      try { this.sonic.send('/n_set', id, 't_trig', 1); } catch (e) {
+        console.error('[GridEngine:TRIG] /n_set t_trig FAILED:', e);
+      }
+    } else {
+      console.warn(`[GridEngine:TRIG] triggerSample(graphId=${graphId}) → no active synth found! Active nodes:`, [...this._active.entries()]);
     }
   }
 }

@@ -18,13 +18,17 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
     if (!engine?.booted) return;
 
     try {
+      console.log(`[SamplePlayer:FILE] Loading file "${file.name}" (${file.size} bytes, type=${file.type}) for nodeId=${nodeId}`);
+
       // Read file as ArrayBuffer for both decoding and sending to engine
       const arrayBuf = await file.arrayBuffer();
+      console.log(`[SamplePlayer:FILE] ArrayBuffer read: ${arrayBuf.byteLength} bytes`);
 
       // Decode audio for waveform display
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
       audioCtx.close();
+      console.log(`[SamplePlayer:FILE] Decoded: ${decoded.numberOfChannels}ch, ${decoded.sampleRate}Hz, ${decoded.duration.toFixed(2)}s, ${decoded.length} frames`);
 
       // Mix down to mono for waveform display
       const ch0 = decoded.getChannelData(0);
@@ -41,7 +45,9 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
 
       // Load into engine buffer
       const data = new Uint8Array(arrayBuf);
+      console.log(`[SamplePlayer:FILE] Sending ${data.length} bytes to engine.loadSampleBuffer(nodeId=${nodeId})`);
       const bufNum = engine.loadSampleBuffer(nodeId, data);
+      console.log(`[SamplePlayer:FILE] Buffer allocated: bufNum=${bufNum}`);
 
       // Store waveform data
       setSampleData((prev) => ({
@@ -57,7 +63,11 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
 
       // Update the synth's buf parameter if playing
       if (bufNum != null) {
+        console.log(`[SamplePlayer:FILE] Setting buf param on synth: nodeId=${nodeId}, buf=${bufNum}`);
+        console.log(`[SamplePlayer:FILE] Synth active for nodeId=${nodeId}?`, engine.isPlaying(nodeId));
         engine.setParam(nodeId, 'buf', bufNum);
+      } else {
+        console.warn(`[SamplePlayer:FILE] bufNum is null! Cannot set buf param`);
       }
 
       // Reset region to full sample
@@ -73,8 +83,9 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
           },
         };
       });
+      console.log(`[SamplePlayer:FILE] ✅ File load complete for nodeId=${nodeId}`);
     } catch (err) {
-      console.error('[SamplePlayer] Failed to load sample:', err);
+      console.error('[SamplePlayer:FILE] Failed to load sample:', err);
       setStatus?.(`Error loading sample: ${err.message}`);
     }
   }, [engineRef, setNodes, setStatus]);
@@ -85,14 +96,18 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
     if (!engine?.booted) return;
 
     try {
+      console.log(`[SamplePlayer:BUILTIN] Loading "${sampleName}" for nodeId=${nodeId}`);
+
       // Fetch and decode for waveform display
       const resp = await fetch(`/supersonic/samples/${sampleName}.flac`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const arrayBuf = await resp.arrayBuffer();
+      console.log(`[SamplePlayer:BUILTIN] Fetched "${sampleName}.flac": ${arrayBuf.byteLength} bytes`);
 
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
       audioCtx.close();
+      console.log(`[SamplePlayer:BUILTIN] Decoded: ${decoded.numberOfChannels}ch, ${decoded.sampleRate}Hz, ${decoded.duration.toFixed(2)}s, ${decoded.length} frames`);
 
       const ch0 = decoded.getChannelData(0);
       let mono;
@@ -106,6 +121,7 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
 
       // Load into engine
       const bufNum = await engine.loadBuiltinSample(nodeId, sampleName);
+      console.log(`[SamplePlayer:BUILTIN] Buffer allocated: bufNum=${bufNum}`);
 
       setSampleData((prev) => ({
         ...prev,
@@ -119,7 +135,11 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
       }));
 
       if (bufNum != null) {
+        console.log(`[SamplePlayer:BUILTIN] Setting buf param: nodeId=${nodeId}, buf=${bufNum}`);
+        console.log(`[SamplePlayer:BUILTIN] Synth active for nodeId=${nodeId}?`, engine.isPlaying(nodeId));
         engine.setParam(nodeId, 'buf', bufNum);
+      } else {
+        console.warn(`[SamplePlayer:BUILTIN] bufNum is null! Cannot set buf param`);
       }
 
       setNodes((prev) => {
@@ -134,14 +154,16 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
           },
         };
       });
+      console.log(`[SamplePlayer:BUILTIN] ✅ Builtin sample load complete for nodeId=${nodeId}`);
     } catch (err) {
-      console.error(`[SamplePlayer] Failed to load builtin sample "${sampleName}":`, err);
+      console.error(`[SamplePlayer:BUILTIN] Failed to load "${sampleName}":`, err);
       setStatus?.(`Error loading sample: ${err.message}`);
     }
   }, [engineRef, setNodes, setStatus]);
 
   // Handle region change on waveform
   const handleSampleRegionChange = useCallback((nodeId, start, end) => {
+    console.log(`[SamplePlayer:REGION] nodeId=${nodeId}, start=${start.toFixed(3)}, end=${end.toFixed(3)}`);
     setNodes((prev) => {
       const node = prev[nodeId];
       if (!node) return prev;
@@ -160,7 +182,12 @@ export function useSamplePlayer({ engineRef, setNodes, setStatus }) {
   // Trigger sample playback
   const handleSampleTrigger = useCallback((nodeId) => {
     const engine = engineRef.current;
-    if (!engine?.booted) return;
+    if (!engine?.booted) {
+      console.warn(`[SamplePlayer:TRIG] Engine not booted, ignoring trigger for nodeId=${nodeId}`);
+      return;
+    }
+    const sd = sampleData[nodeId];
+    console.log(`[SamplePlayer:TRIG] Triggering nodeId=${nodeId}, hasSampleData=${!!sd}, bufNum=${sd?.bufNum ?? 'NONE'}, isPlaying=${engine.isPlaying(nodeId)}`);
     engine.triggerSample(nodeId);
 
     // Track playhead animation
