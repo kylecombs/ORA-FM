@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import WaveformDisplay from '../../../gridview/components/WaveformDisplay';
+import WaveformDisplay from './WaveformDisplay';
 
 export default {
   title: 'Organisms/WaveformDisplay',

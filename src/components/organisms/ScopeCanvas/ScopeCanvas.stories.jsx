@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import ScopeCanvas from '../../../gridview/ScopeCanvas';
+import ScopeCanvas from './ScopeCanvas';
 import { SCOPE_BUFFER_SIZE } from '../../../gridview/constants';
 
 export default {

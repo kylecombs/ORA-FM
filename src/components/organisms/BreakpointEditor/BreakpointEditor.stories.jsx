@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import BreakpointEditor from '../../../BreakpointEditor';
+import BreakpointEditor from './BreakpointEditor';
 
 export default {
   title: 'Organisms/BreakpointEditor',
