@@ -1,5 +1,6 @@
 /* ── ORA-FM Design Tokens ─────────────────────────────── */
 
+/* ── Dark theme (default) ── */
 :root {
   /* ── Colors ── */
   --ora-ink:      #d4cfc8;
@@ -13,6 +14,11 @@
   --ora-rose:     #c08880;
   --ora-sage:     #7aab88;
   --ora-glow:     rgba(184, 154, 106, 0.12);
+  --ora-mist-glow:  rgba(138, 176, 200, 0.12);
+  --ora-rose-glow:  rgba(192, 136, 128, 0.12);
+  --ora-sage-glow:  rgba(122, 171, 136, 0.12);
+  --ora-dim-glow:   rgba(122, 117, 112, 0.12);
+  --ora-grain:    0.6;
 
   /* ── Typography ── */
   --ora-font-mono:  'DM Mono', monospace;
@@ -43,4 +49,24 @@
   --ora-transition-fast: 0.15s ease;
   --ora-transition-base: 0.2s ease;
   --ora-transition-slow: 0.4s ease;
+}
+
+/* ── Light theme — Ableton / Max MSP inspired ── */
+:root[data-theme="light"] {
+  --ora-ink:      #2a2a2a;
+  --ora-dim:      #888888;
+  --ora-deep:     #e0e0e0;
+  --ora-surface:  #d6d6d6;
+  --ora-lift:     #cbcbcb;
+  --ora-border:   #b0b0b0;
+  --ora-gold:     #9a7a42;
+  --ora-mist:     #4a7e9e;
+  --ora-rose:     #a85e56;
+  --ora-sage:     #4e8a5c;
+  --ora-glow:     rgba(154, 122, 66, 0.14);
+  --ora-mist-glow:  rgba(74, 126, 158, 0.12);
+  --ora-rose-glow:  rgba(168, 94, 86, 0.12);
+  --ora-sage-glow:  rgba(78, 138, 92, 0.12);
+  --ora-dim-glow:   rgba(136, 136, 136, 0.10);
+  --ora-grain:    0.25;
 }

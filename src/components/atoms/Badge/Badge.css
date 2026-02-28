@@ -16,19 +16,19 @@
   color: var(--ora-gold);
 }
 .ora-badge--mist {
-  background: rgba(138, 176, 200, 0.12);
+  background: var(--ora-mist-glow);
   color: var(--ora-mist);
 }
 .ora-badge--rose {
-  background: rgba(192, 136, 128, 0.12);
+  background: var(--ora-rose-glow);
   color: var(--ora-rose);
 }
 .ora-badge--sage {
-  background: rgba(122, 171, 136, 0.12);
+  background: var(--ora-sage-glow);
   color: var(--ora-sage);
 }
 .ora-badge--dim {
-  background: rgba(122, 117, 112, 0.12);
+  background: var(--ora-dim-glow);
   color: var(--ora-dim);
 }
 

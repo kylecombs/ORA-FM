@@ -1,3 +1,5 @@
+import { useTheme } from '../../ThemeProvider';
+
 export default function Toolbar({
   booted,
   booting,
@@ -16,6 +18,7 @@ export default function Toolbar({
   handleFileSelect,
   handleToggleRecording,
 }) {
+  const { theme, toggleTheme } = useTheme();
   return (
     <div className="sense-toolbar">
       <button
@@ -85,6 +88,16 @@ export default function Toolbar({
         title="Ask Daphne — questions &amp; patch generation"
       >
         {daphneOpen ? '— Hide Daphne' : '~ Ask Daphne'}
+      </button>
+
+      <div className="toolbar-divider" />
+
+      <button
+        className="toolbar-btn theme-toggle"
+        onClick={toggleTheme}
+        title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? '☀ Light' : '☽ Dark'}
       </button>
 
       <input
