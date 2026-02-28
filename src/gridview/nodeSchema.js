@@ -640,9 +640,10 @@ export const NODE_SCHEMA = {
     category: 'fx',
     inputs: ['in'],
     outputs: ['out'],
-    modInputs: ['level'],
+    modInputs: ['level', 'gate'],
     params: {
       level: { label: 'level', min: 0,   max: 1, step: 0.01, val: 0.5 },
+      gate:  { label: 'gate',  min: 0,   max: 1, step: 0.01, val: 1 },
       mode:  { label: 'mode',  min: 0,   max: 1, step: 0.01, val: 0.5 },
       res:   { label: 'res',   min: 0,   max: 1, step: 0.01, val: 0.3 },
       mix:   { label: 'mix',   min: 0,   max: 1, step: 0.01, val: 1 },

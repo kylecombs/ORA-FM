@@ -41,12 +41,16 @@
  *     var in_bus = \in_bus.kr(0);
  *     var out_bus = \out_bus.kr(0);
  *     var level = (\level.kr(0.5) + \level_mod.ar(0)).clip(0, 1);
+ *     var gate = (\gate.kr(1) + \gate_mod.ar(0)).clip(0, 1);
  *     var mode = \mode.kr(0.5); // 0=LP, 0.5=combo, 1=VCA
  *     var res = \res.kr(0.5);
  *     var mix = \mix.kr(1);
  *
- *     // Vactrol-like lag on level for organic response
- *     var smoothLevel = Lag.kr(level, 0.01);
+ *     // Combine level and gate: effective = level * gate
+ *     var effective = level * gate;
+ *
+ *     // Vactrol-like lag on effective level for organic response
+ *     var smoothLevel = Lag.kr(effective, 0.01);
  *
  *     // Map level to cutoff: exponential 20 Hz → 20 kHz
  *     var cutoff = (smoothLevel * 20000).max(20).min(20000);
@@ -405,6 +409,7 @@ function buildLowpassGate() {
   const PI_IN_BUS  = sd.addParam('in_bus', 0);
   const PI_OUT_BUS = sd.addParam('out_bus', 0);
   const PI_LEVEL   = sd.addParam('level', 0.5);
+  const PI_GATE    = sd.addParam('gate', 1);
   const PI_MODE    = sd.addParam('mode', 0.5);
   const PI_RES     = sd.addParam('res', 0.5);
   const PI_MIX     = sd.addParam('mix', 1);
@@ -412,6 +417,7 @@ function buildLowpassGate() {
   // ── ar modulation parameters ──
   const krCount = sd.params.length;
   const PI_LEVEL_MOD = sd.addParam('level_mod', 0);
+  const PI_GATE_MOD  = sd.addParam('gate_mod', 0);
 
   // ── Control UGens ──
   const ctrlUgens = [];
@@ -438,10 +444,21 @@ function buildLowpassGate() {
     [sd.ref(addLevel, 0), C0, C1], 1);
   const levelRef = sd.ref(clipLevel, 0);
 
-  // ── Vactrol lag: Lag.ar(level, 0.01) for organic response ──
+  // ── gate = clip(gate_kr + gate_mod_ar, 0, 1) ──
+  const addGate = sd.addUGen('BinaryOpUGen', AUDIO,
+    [krRef(PI_GATE), arRef(PI_GATE_MOD)], 1, B_ADD);
+  const clipGate = sd.addUGen('Clip', AUDIO,
+    [sd.ref(addGate, 0), C0, C1], 1);
+
+  // ── effective = level * gate ──
+  const effective = sd.addUGen('BinaryOpUGen', AUDIO,
+    [levelRef, sd.ref(clipGate, 0)], 1, B_MUL);
+  const effectiveRef = sd.ref(effective, 0);
+
+  // ── Vactrol lag: Lag.ar(effective, 0.01) for organic response ──
   // Lag.ar(in, lagTime) — inputs: [in, lagTime]
   const lagLevel = sd.addUGen('Lag', AUDIO,
-    [levelRef, C0_01], 1);
+    [effectiveRef, C0_01], 1);
   const smoothRef = sd.ref(lagLevel, 0);
 
   // ── Cutoff = level * 20000, clamped to [20, 20000] ──
