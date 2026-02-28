@@ -301,4 +301,26 @@ When the graph requires an intermediate audio bus (e.g., Source → Spectral Fre
 
 ---
 
+## 13. LFO Module Modulation Has No Effect (SynthDef Not Loaded)
+
+**Symptom:** Connecting the LFO module's output to any parameter input on another module produces no modulation effect. The target parameter stays at its base value as if no cable is connected.
+
+**Root cause:** The `lfo` synthdef was missing from the `SOURCE_DEFS` array in `src/audio/gridEngine.js`. During engine boot, all synthdefs listed in `SOURCE_DEFS` and `FX_DEFS` are loaded via `sonic.loadSynthDef()`. Since `'lfo'` was not in either list, scsynth never received the definition. When the routing system issued `/s_new 'lfo' ...`, scsynth silently ignored it (no synth was created), so no audio was ever written to the modulation bus. The target's `_mod` parameter was mapped to an empty bus, resulting in zero modulation.
+
+**Fix:** Add `'lfo'` to the `SOURCE_DEFS` array alongside the other LF oscillator defs (`lfnoise0`, `lfnoise1`, `lfnoise2`):
+
+```javascript
+const SOURCE_DEFS = [
+  // ...
+  'lfnoise2',
+  'lfo',        // ← was missing
+  'white_noise',
+  // ...
+];
+```
+
+**Reference:** `src/audio/gridEngine.js` — `SOURCE_DEFS` array
+
+---
+
 *Add new gotchas below this line. Include: symptom, root cause, fix, and a reference to relevant code or commits.*

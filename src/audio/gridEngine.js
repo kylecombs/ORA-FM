@@ -28,6 +28,7 @@ const SOURCE_DEFS = [
   'lfnoise0',
   'lfnoise1',
   'lfnoise2',
+  'lfo',
   'white_noise',
   'pink_noise',
   'buchla_osc',
