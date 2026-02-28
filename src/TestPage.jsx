@@ -577,9 +577,9 @@ export default function TestPage() {
       </main>
 
       <footer>
-        <a href="/">← Ambient</a>
+        <a href="/ambient">Ambient</a>
         {' · '}
-        <a href="/grid">Grid View</a>
+        <a href="/">Grid View</a>
         {' · '}
         Test Lab — isolated synth debugging
       </footer>

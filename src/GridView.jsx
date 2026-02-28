@@ -801,7 +801,7 @@ export default function GridView() {
 
         {/* Footer */}
         <div className="sense-footer">
-          <a href="/">← Ambient</a>
+          <a href="/ambient">Ambient</a>
           {' · '}
           <a href="/test">Test Lab</a>
           {' · '}

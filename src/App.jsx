@@ -545,7 +545,7 @@ export default function App() {
       )}
 
       <footer>
-        <a href="/grid">Grid View</a>
+        <a href="/">Grid View</a>
         {' · '}
         <a href="/test">Test Lab</a>
         <br />
