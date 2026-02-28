@@ -1,0 +1,50 @@
+.ora-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ora-space-sm);
+  cursor: pointer;
+}
+
+.ora-toggle--disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ora-toggle__track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: var(--ora-radius-full);
+  background: var(--ora-border);
+  border: 1px solid var(--ora-border);
+  cursor: inherit;
+  transition: background var(--ora-transition-fast);
+  padding: 0;
+}
+
+.ora-toggle__track--on {
+  background: var(--ora-gold);
+  border-color: var(--ora-gold);
+}
+
+.ora-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ora-ink);
+  transition: transform var(--ora-transition-fast);
+}
+
+.ora-toggle__track--on .ora-toggle__thumb {
+  transform: translateX(14px);
+  background: var(--ora-deep);
+}
+
+.ora-toggle__label {
+  font-family: var(--ora-font-mono);
+  font-size: var(--ora-text-sm);
+  color: var(--ora-ink);
+}

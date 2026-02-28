@@ -4,3 +4,4 @@ dist
 *.local
 .mcp.json
 scripts/ralph/docker/.env
+storybook-static

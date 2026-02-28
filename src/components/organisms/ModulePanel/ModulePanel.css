@@ -1,0 +1,87 @@
+.ora-module-panel {
+  width: 220px;
+  background: var(--ora-surface);
+  border-right: 1px solid var(--ora-border);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ora-module-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ora-space-sm) var(--ora-space-md);
+  border-bottom: 1px solid var(--ora-border);
+}
+
+.ora-module-panel__close {
+  background: none;
+  border: none;
+  color: var(--ora-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+}
+
+.ora-module-panel__close:hover {
+  color: var(--ora-ink);
+}
+
+.ora-module-panel__search {
+  padding: var(--ora-space-sm);
+}
+
+.ora-module-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--ora-space-sm) var(--ora-space-sm);
+}
+
+.ora-module-panel__cat-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ora-space-xs);
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--ora-dim);
+  cursor: pointer;
+  padding: var(--ora-space-xs) 0;
+  font-family: var(--ora-font-mono);
+  font-size: var(--ora-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ora-module-panel__count {
+  margin-left: auto;
+  font-size: var(--ora-text-xs);
+  color: var(--ora-border);
+}
+
+.ora-module-panel__items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: var(--ora-space-md);
+  margin-bottom: var(--ora-space-xs);
+}
+
+.ora-module-panel__item {
+  background: none;
+  border: none;
+  color: var(--ora-ink);
+  font-family: var(--ora-font-mono);
+  font-size: var(--ora-text-sm);
+  text-align: left;
+  padding: var(--ora-space-xs) var(--ora-space-sm);
+  border-radius: var(--ora-radius-sm);
+  cursor: pointer;
+  transition: background var(--ora-transition-fast);
+}
+
+.ora-module-panel__item:hover {
+  background: var(--ora-glow);
+  color: var(--ora-gold);
+}

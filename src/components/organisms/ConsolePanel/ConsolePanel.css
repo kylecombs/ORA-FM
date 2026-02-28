@@ -1,0 +1,53 @@
+.ora-console {
+  background: var(--ora-deep);
+  border-top: 1px solid var(--ora-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  max-height: 300px;
+}
+
+.ora-console__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ora-space-xs) var(--ora-space-md);
+  border-bottom: 1px solid var(--ora-border);
+}
+
+.ora-console__actions {
+  display: flex;
+  gap: var(--ora-space-xs);
+}
+
+.ora-console__action {
+  background: none;
+  border: none;
+  color: var(--ora-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+}
+
+.ora-console__action:hover {
+  color: var(--ora-ink);
+}
+
+.ora-console__output {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--ora-space-sm) var(--ora-space-md);
+  font-family: var(--ora-font-mono);
+  font-size: var(--ora-text-xs);
+  line-height: 1.6;
+}
+
+.ora-console__empty {
+  color: var(--ora-dim);
+  font-style: italic;
+}
+
+.ora-console__line--info  { color: var(--ora-ink); }
+.ora-console__line--warn  { color: var(--ora-gold); }
+.ora-console__line--error { color: var(--ora-rose); }
+.ora-console__line--debug { color: var(--ora-dim); }

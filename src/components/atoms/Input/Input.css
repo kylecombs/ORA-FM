@@ -1,0 +1,36 @@
+.ora-input {
+  font-family: var(--ora-font-mono);
+  color: var(--ora-ink);
+  background: var(--ora-deep);
+  border: 1px solid var(--ora-border);
+  border-radius: var(--ora-radius-sm);
+  outline: none;
+  transition: border-color var(--ora-transition-fast);
+  width: 100%;
+}
+
+.ora-input--sm {
+  font-size: var(--ora-text-xs);
+  padding: var(--ora-space-xs) var(--ora-space-sm);
+}
+.ora-input--md {
+  font-size: var(--ora-text-sm);
+  padding: var(--ora-space-sm) var(--ora-space-md);
+}
+.ora-input--lg {
+  font-size: var(--ora-text-md);
+  padding: var(--ora-space-md) var(--ora-space-lg);
+}
+
+.ora-input::placeholder {
+  color: var(--ora-dim);
+}
+
+.ora-input:focus {
+  border-color: var(--ora-gold);
+}
+
+.ora-input:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

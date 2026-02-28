@@ -1,0 +1,5 @@
+.ora-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ora-space-sm);
+}

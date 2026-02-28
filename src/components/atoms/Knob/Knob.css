@@ -1,0 +1,9 @@
+.ora-knob {
+  display: block;
+  touch-action: none;
+  user-select: none;
+}
+
+.ora-knob--disabled {
+  opacity: 0.35;
+}

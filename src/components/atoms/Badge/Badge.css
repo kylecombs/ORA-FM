@@ -1,0 +1,48 @@
+.ora-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ora-space-xs);
+  font-family: var(--ora-font-mono);
+  font-size: var(--ora-text-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px var(--ora-space-sm);
+  border-radius: var(--ora-radius-full);
+  line-height: 1.4;
+}
+
+.ora-badge--gold {
+  background: var(--ora-glow);
+  color: var(--ora-gold);
+}
+.ora-badge--mist {
+  background: rgba(138, 176, 200, 0.12);
+  color: var(--ora-mist);
+}
+.ora-badge--rose {
+  background: rgba(192, 136, 128, 0.12);
+  color: var(--ora-rose);
+}
+.ora-badge--sage {
+  background: rgba(122, 171, 136, 0.12);
+  color: var(--ora-sage);
+}
+.ora-badge--dim {
+  background: rgba(122, 117, 112, 0.12);
+  color: var(--ora-dim);
+}
+
+/* Pulse animation for recording / active states */
+.ora-badge--pulse::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ora-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ora-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

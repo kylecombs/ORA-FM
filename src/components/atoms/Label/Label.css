@@ -1,0 +1,23 @@
+.ora-label {
+  font-family: var(--ora-font-mono);
+  line-height: 1.2;
+}
+
+/* Sizes */
+.ora-label--xs { font-size: var(--ora-text-xs); }
+.ora-label--sm { font-size: var(--ora-text-sm); }
+.ora-label--md { font-size: var(--ora-text-md); }
+.ora-label--lg { font-size: var(--ora-text-lg); }
+
+/* Variants */
+.ora-label--default  { color: var(--ora-ink); }
+.ora-label--dim      { color: var(--ora-dim); }
+.ora-label--gold     { color: var(--ora-gold); }
+.ora-label--mist     { color: var(--ora-mist); }
+.ora-label--rose     { color: var(--ora-rose); }
+.ora-label--sage     { color: var(--ora-sage); }
+.ora-label--heading  {
+  font-family: var(--ora-font-serif);
+  font-style: italic;
+  color: var(--ora-gold);
+}

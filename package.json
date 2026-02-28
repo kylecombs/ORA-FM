@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "build:synthdefs": "./synthdefs/build.sh"
+    "build:synthdefs": "./synthdefs/build.sh",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.4",
@@ -25,6 +27,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@storybook/addon-essentials": "^8.6.14",
+    "@storybook/blocks": "^8.6.14",
+    "@storybook/react": "^8.6.14",
+    "@storybook/react-vite": "^8.6.14",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
@@ -32,6 +38,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "storybook": "^8.6.14",
     "vite": "^7.3.1"
   }
 }
