@@ -490,6 +490,31 @@
   letter-spacing: 0.05em;
 }
 
+/* ── Param toggle button ─────────────────── */
+.param-toggle-btn {
+  flex: 1;
+  padding: 2px 6px;
+  font-size: 0.55rem;
+  font-family: inherit;
+  border: 1px solid rgba(122,117,112,0.3);
+  border-radius: 3px;
+  background: rgba(122,117,112,0.1);
+  color: var(--ink, #d4cfc8);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: background 0.1s, border-color 0.1s;
+}
+.param-toggle-btn:hover {
+  background: rgba(122,117,112,0.2);
+}
+.param-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
 /* ── Live dot indicator ────────────────────── */
 .node-live-dot {
   position: absolute;

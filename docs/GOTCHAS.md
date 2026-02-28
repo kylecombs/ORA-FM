@@ -285,7 +285,23 @@ If you increase `SCOPE_BUF_FRAMES`, increase the polling interval proportionally
 
 ---
 
-## 12. LFO Module Modulation Has No Effect (SynthDef Not Loaded)
+## 12. Custom FX SynthDef Using `out` Instead of `out_bus` — Silent Output in FX Chains
+
+**Symptom:** The Spectral Freeze module produces silence when its wet signal is routed through downstream FX modules before reaching AudioOut. The dry signal (mix=0) also fails in chained scenarios. When connected directly to AudioOut, it may appear to work because the default output bus happens to be 0 (hardware out).
+
+**Root cause:** The hand-written `spectral_freeze.scsyndef` binary used `out` as the output bus parameter name, but the audio routing code (`useAudioRouting.js`) passes `out_bus` — the convention used by all other FX SynthDefs (Sonic Pi FX, `comb`, `lowpass_gate`, etc.). Since scsynth silently ignores unknown parameter names in `/s_new`, the `out_bus` value was discarded and the synth's `out` parameter stayed at its default value of 0. The synth always wrote to bus 0 (hardware output) regardless of the routing topology.
+
+When the graph requires an intermediate audio bus (e.g., Source → Spectral Freeze → Reverb → AudioOut), the routing assigns bus 18 as the connection between Spectral Freeze and Reverb. But the synth writes to bus 0 (ignoring `out_bus=18`), so Reverb reads from empty bus 18 → silence.
+
+**Fix:** Renamed the SynthDef parameter from `out` to `out_bus` in `scripts/generate-spectral-freeze-synthdef.cjs` and regenerated the binary. Also reordered parameters to match the `in_bus, out_bus, ...` convention used by other FX SynthDefs.
+
+**Lesson:** When hand-writing `.scsyndef` binaries for FX modules, always use `in_bus` and `out_bus` as bus parameter names to match the routing code in `useAudioRouting.js`. The Sonic Pi FX convention (`in_bus`, `out_bus`) is the standard in this project.
+
+**Reference:** `scripts/generate-spectral-freeze-synthdef.cjs`, `src/gridview/hooks/useAudioRouting.js:298-303`
+
+---
+
+## 13. LFO Module Modulation Has No Effect (SynthDef Not Loaded)
 
 **Symptom:** Connecting the LFO module's output to any parameter input on another module produces no modulation effect. The target parameter stays at its base value as if no cable is connected.
 

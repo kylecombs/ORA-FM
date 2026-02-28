@@ -426,6 +426,25 @@ export default function NodeRenderer({
                 ? modulatedParams[key]
                 : (node.params[key] ?? def.val);
 
+            if (def.type === 'button') {
+              const isOn = (node.params[key] ?? def.val) >= 0.5;
+              return (
+                <div className={`node-param${isModulated ? ' modulated' : ''}${isAudioRateMod ? ' audio-rate-mod' : ''}`} key={key}>
+                  <span className="param-label">{def.label}</span>
+                  <button
+                    className={`param-toggle-btn${isOn ? ' active' : ''}`}
+                    disabled={isModulated && !isAudioRateMod}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      handleParamChange(node.id, key, isOn ? 0 : 1);
+                    }}
+                  >
+                    {isOn ? 'on' : 'off'}
+                  </button>
+                </div>
+              );
+            }
+
             return (
               <div className={`node-param${isModulated ? ' modulated' : ''}${isAudioRateMod ? ' audio-rate-mod' : ''}`} key={key}>
                 <span className="param-label">{def.label}</span>
