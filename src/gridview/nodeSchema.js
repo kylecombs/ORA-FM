@@ -627,7 +627,7 @@ export const NODE_SCHEMA = {
     inputs: ['in'],
     outputs: ['out'],
     params: {
-      freeze: { label: 'freeze', min: 0, max: 1, step: 1,    val: 0 },
+      freeze: { label: 'freeze', min: 0, max: 1, step: 1,    val: 0, type: 'button' },
       mix:    { label: 'mix',    min: 0, max: 1, step: 0.01,  val: 1 },
       amp:    { label: 'amp',    min: 0, max: 1, step: 0.01,  val: 1 },
     },

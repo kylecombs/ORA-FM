@@ -8,19 +8,19 @@
 //  and amplitude control.
 //
 //  Equivalent SuperCollider source:
-//    SynthDef(\spectral_freeze, { |out=0, in_bus=0, freeze=0, mix=1, amp=1|
+//    SynthDef(\spectral_freeze, { |in_bus=0, out_bus=0, freeze=0, mix=1, amp=1|
 //        var sig = In.ar(in_bus, 1);
 //        var chain = FFT(LocalBuf(2048), sig);
 //        var frozen = PV_MagFreeze(chain, freeze);
 //        var wet = IFFT(frozen);
 //        var pan = mix.madd(2, -1);  // 0..1 → -1..1
 //        var output = XFade2.ar(sig, wet, pan, amp);
-//        Out.ar(out, output ! 2);    // stereo (duplicated mono)
+//        Out.ar(out_bus, output ! 2);    // stereo (duplicated mono)
 //    });
 //
 //  Parameters:
-//    out    (kr, default 0)  — output audio bus
-//    in_bus (kr, default 0)  — input audio bus
+//    in_bus  (kr, default 0)  — input audio bus
+//    out_bus (kr, default 0)  — output audio bus
 //    freeze (kr, default 0)  — freeze gate: 0 = pass-through, >0 = freeze
 //    mix    (kr, default 1)  — dry/wet crossfade: 0 = dry, 1 = frozen
 //    amp    (kr, default 1)  — output amplitude
@@ -88,17 +88,17 @@ function buildSpectralFreezeSynthDef() {
 
   // ── Parameters ──
   writeInt32(5);          // 5 parameters
-  writeFloat32(0.0);      // out     default = 0
   writeFloat32(0.0);      // in_bus  default = 0
+  writeFloat32(0.0);      // out_bus default = 0
   writeFloat32(0.0);      // freeze  default = 0
   writeFloat32(1.0);      // mix     default = 1
   writeFloat32(1.0);      // amp     default = 1
 
   // ── Parameter Names ──
   writeInt32(5);
-  writePString('out');
-  writeInt32(0);
   writePString('in_bus');
+  writeInt32(0);
+  writePString('out_bus');
   writeInt32(1);
   writePString('freeze');
   writeInt32(2);
@@ -109,7 +109,7 @@ function buildSpectralFreezeSynthDef() {
 
   // ── UGens (10 total) ──
   //
-  //   0  Control.kr       → 5 outputs (out, in_bus, freeze, mix, amp)
+  //   0  Control.kr       → 5 outputs (in_bus, out_bus, freeze, mix, amp)
   //   1  In.ar            → 1 audio output (reads in_bus)
   //   2  MaxLocalBufs     → 1 scalar output (reserves 1 local buffer)
   //   3  LocalBuf         → 1 scalar output (2048-frame FFT buffer)
@@ -129,8 +129,8 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(0);          // 0 inputs
   writeInt32(5);          // 5 outputs
   writeInt16(0);          // special index
-  writeInt8(1);           // output 0 rate: control (out)
-  writeInt8(1);           // output 1 rate: control (in_bus)
+  writeInt8(1);           // output 0 rate: control (in_bus)
+  writeInt8(1);           // output 1 rate: control (out_bus)
   writeInt8(1);           // output 2 rate: control (freeze)
   writeInt8(1);           // output 3 rate: control (mix)
   writeInt8(1);           // output 4 rate: control (amp)
@@ -142,9 +142,9 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(1);          // 1 input
   writeInt32(1);          // 1 output
   writeInt16(0);          // special index
-  // input 0: bus = Control output 1 (in_bus)
+  // input 0: bus = Control output 0 (in_bus)
   writeInt32(0);          // src: UGen 0 (Control)
-  writeInt32(1);          // output index 1 (in_bus)
+  writeInt32(0);          // output index 0 (in_bus)
   // outputs
   writeInt8(2);           // output 0 rate: audio
 
@@ -290,9 +290,9 @@ function buildSpectralFreezeSynthDef() {
   writeInt32(3);          // 3 inputs (bus + 2 channels)
   writeInt32(0);          // 0 outputs
   writeInt16(0);          // special index
-  // input 0: bus = Control output 0 (out)
+  // input 0: bus = Control output 1 (out_bus)
   writeInt32(0);          // src: UGen 0 (Control)
-  writeInt32(0);          // output index 0 (out)
+  writeInt32(1);          // output index 1 (out_bus)
   // input 1: channel 0 = XFade2 output
   writeInt32(8);          // src: UGen 8 (XFade2)
   writeInt32(0);          // output 0
