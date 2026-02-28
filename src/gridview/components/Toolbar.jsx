@@ -3,12 +3,14 @@ export default function Toolbar({
   booting,
   panelOpen,
   consoleOpen,
+  daphneOpen,
   recording,
   recordingTime,
   fileInputRef,
   handleBoot,
   setPanelOpen,
   setConsoleOpen,
+  setDaphneOpen,
   handleSavePatch,
   handleLoadPatch,
   handleFileSelect,
@@ -73,6 +75,16 @@ export default function Toolbar({
         {recording
           ? `Stop ${Math.floor(recordingTime / 60)}:${String(recordingTime % 60).padStart(2, '0')}`
           : 'Rec'}
+      </button>
+
+      <div className="toolbar-divider" />
+
+      <button
+        className={`toolbar-btn ai-toggle${daphneOpen ? ' active' : ''}`}
+        onClick={() => setDaphneOpen((p) => !p)}
+        title="Ask Daphne — questions &amp; patch generation"
+      >
+        {daphneOpen ? '— Hide Daphne' : '~ Ask Daphne'}
       </button>
 
       <input

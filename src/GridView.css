@@ -1774,6 +1774,17 @@
   50% { border-color: rgba(220, 80, 60, 0.2); }
 }
 
+/* AI toggle (Daphne) */
+.toolbar-btn.ai-toggle {
+  border-color: rgba(184, 154, 106, 0.3);
+  color: var(--gold, #b89a6a);
+}
+
+.toolbar-btn.ai-toggle.active {
+  background: rgba(184, 154, 106, 0.1);
+  border-color: rgba(184, 154, 106, 0.5);
+}
+
 /* ── Bang module ───────────────────────── */
 .sense-node.bang {
   border-style: dashed;
